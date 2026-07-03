@@ -1,0 +1,19 @@
+<launch>
+  <arg name="obstacle" default="0.4"/>
+  <arg name="degrees" default="-90.0"/>
+  <arg name="forward_speed" default="0.4"/>
+  <arg name="angular_speed" default="0.5"/>
+  <arg name="rotation_scale" default="0.5"/>
+  <arg name="use_rviz" default="true"/>
+
+  <node pkg="rviz2" exec="rviz2" name="rviz2" output="screen" if="$(var use_rviz)"
+        args="-d $(find-pkg-share attach_shelf)/rviz/pre_approach.rviz"/>
+
+  <node pkg="attach_shelf" exec="pre_approach" name="pre_approach" output="screen" on_exit="shutdown">
+    <param name="obstacle" value="$(var obstacle)" type="float"/>
+    <param name="degrees" value="$(var degrees)" type="float"/>
+    <param name="forward_speed" value="$(var forward_speed)" type="float"/>
+    <param name="angular_speed" value="$(var angular_speed)" type="float"/>
+    <param name="rotation_scale" value="$(var rotation_scale)" type="float"/>
+  </node>
+</launch>
