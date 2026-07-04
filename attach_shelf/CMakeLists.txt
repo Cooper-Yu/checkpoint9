@@ -10,6 +10,8 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(std_msgs REQUIRED)
+find_package(tf2_ros REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
@@ -23,8 +25,24 @@ ament_target_dependencies(pre_approach
   sensor_msgs
 )
 
+add_executable(approach_service_server src/approach_service_server.cpp)
+ament_target_dependencies(approach_service_server
+  rclcpp
+  geometry_msgs
+  sensor_msgs
+  std_msgs
+  tf2_ros
+)
+
+rosidl_get_typesupport_target(cpp_typesupport_target
+  ${PROJECT_NAME}
+  "rosidl_typesupport_cpp"
+)
+target_link_libraries(approach_service_server "${cpp_typesupport_target}")
+
 install(TARGETS
   pre_approach
+  approach_service_server
   DESTINATION lib/${PROJECT_NAME}
 )
 
