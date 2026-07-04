@@ -95,7 +95,7 @@ private:
   static constexpr double kPi = 3.14159265358979323846;
   static constexpr double kFrontWindowDegrees = 20.0;
   static constexpr double kScanPauseTimeout = 1.0;
-  static constexpr double kScanSafeStopTimeout = 3.0;
+  static constexpr double kScanSafeStopTimeout = 10.0;
   static constexpr int kInvalidScanLimit = 30;
 
   bool get_front_distance(const sensor_msgs::msg::LaserScan & scan, double window_degrees,
