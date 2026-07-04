@@ -201,10 +201,8 @@ private:
       }
 
       case State::ROTATING: {
-        if (!check_runtime_safety()) {
-          return;
-        }
-
+        // During open-loop rotation, the front scan window may point away from the wall.
+        // Do not require a fresh front-distance reading here; bound the motion by time.
         const double elapsed = (now() - rotation_start_time_).seconds();
         if (elapsed < rotate_time_) {
           publish_rotate();

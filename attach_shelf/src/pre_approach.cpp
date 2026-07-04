@@ -14,16 +14,16 @@ class PreApproach : public rclcpp::Node
 {
 public:
   PreApproach()
-  : Node("pre_approach"),
-    obstacle_(0.4),
-    degrees_(-90.0),
-    forward_speed_(0.4),
-    angular_speed_(0.5),
-    rotation_scale_(0.5),
-    rotate_time_(0.0),
-    invalid_scan_count_(0),
-    state_(State::WAITING_FOR_SCAN),
-    shutdown_requested_(false)
+      : Node("pre_approach"),
+        obstacle_(0.4),
+        degrees_(-90.0),
+        forward_speed_(0.4),
+        angular_speed_(0.5),
+        rotation_scale_(0.5),
+        rotate_time_(0.0),
+        invalid_scan_count_(0),
+        state_(State::WAITING_FOR_SCAN),
+        shutdown_requested_(false)
   {
     declare_parameter<double>("obstacle", obstacle_);
     declare_parameter<double>("degrees", degrees_);
@@ -49,11 +49,8 @@ public:
 
     if (std::abs(degrees_) > 1e-6 && std::abs(angular_speed_) < 1e-6) {
       state_ = State::SAFE_STOP;
-      RCLCPP_ERROR(
-        get_logger(),
-        "Invalid angular_speed parameter: %.3f while degrees is %.3f",
-        angular_speed_,
-        degrees_);
+      RCLCPP_ERROR(get_logger(), "Invalid angular_speed parameter: %.3f while degrees is %.3f",
+                   angular_speed_, degrees_);
     }
 
     if (rotation_scale_ <= 0.0) {
@@ -73,26 +70,20 @@ public:
     cmd_vel_pub_ = create_publisher<geometry_msgs::msg::Twist>("/cmd_vel", 10);
 
     scan_sub_ = create_subscription<sensor_msgs::msg::LaserScan>(
-      "/scan",
-      rclcpp::SensorDataQoS(),
-      std::bind(&PreApproach::scan_callback, this, std::placeholders::_1));
+        "/scan", rclcpp::SensorDataQoS(),
+        std::bind(&PreApproach::scan_callback, this, std::placeholders::_1));
 
-    control_timer_ = create_wall_timer(
-      100ms,
-      std::bind(&PreApproach::timer_callback, this));
+    control_timer_ = create_wall_timer(100ms, std::bind(&PreApproach::timer_callback, this));
 
-    RCLCPP_INFO(
-      get_logger(),
-      "pre_approach started: obstacle=%.2f m, degrees=%.2f, forward_speed=%.2f m/s, angular_speed=%.2f rad/s, rotation_scale=%.2f",
-      obstacle_,
-      degrees_,
-      forward_speed_,
-      angular_speed_,
-      rotation_scale_);
+    RCLCPP_INFO(get_logger(),
+                "pre_approach started: obstacle=%.2f m, degrees=%.2f, forward_speed=%.2f m/s, "
+                "angular_speed=%.2f rad/s, rotation_scale=%.2f",
+                obstacle_, degrees_, forward_speed_, angular_speed_, rotation_scale_);
   }
 
 private:
-  enum class State {
+  enum class State
+  {
     WAITING_FOR_SCAN,
     MOVING_FORWARD,
     STOP_BEFORE_ROTATE,
@@ -103,18 +94,15 @@ private:
 
   static constexpr double kPi = 3.14159265358979323846;
 
-  bool get_front_distance(
-    const sensor_msgs::msg::LaserScan & scan,
-    double window_degrees,
-    double & front_distance)
+  bool get_front_distance(const sensor_msgs::msg::LaserScan & scan, double window_degrees,
+                          double & front_distance)
   {
     std::vector<double> valid_ranges;
 
     // Use a small window around 0 rad instead of a single ray to reduce noise.
     double half_window = window_degrees / 2 * kPi / 180;
 
-    for (double i = -half_window; i < half_window; i += scan.angle_increment)
-    {
+    for (double i = -half_window; i < half_window; i += scan.angle_increment) {
       // Convert the desired angle into the matching ranges[] index.
       int index = static_cast<int>(std::round((i - scan.angle_min) / scan.angle_increment));
 
@@ -137,7 +125,7 @@ private:
       front_distance = *std::min_element(valid_ranges.begin(), valid_ranges.end());
       return true;
     }
-    
+
     return false;
   }
 
@@ -158,8 +146,8 @@ private:
 
   void timer_callback()
   {
-    switch(state_) {
-      case State::WAITING_FOR_SCAN: {  
+    switch (state_) {
+      case State::WAITING_FOR_SCAN: {
         publish_stop();
 
         if (!front_distance_.has_value()) {
@@ -184,16 +172,16 @@ private:
 
         // Move forward until the front obstacle reaches the requested distance.
         publish_forward();
-         
+
         if (front_distance_.value() <= obstacle_) {
           publish_stop();
           stop_start_time_ = this->now();
           state_ = State::STOP_BEFORE_ROTATE;
         }
-          
+
         return;
       }
-        
+
       // STOP_BEFORE_ROTATE -> ROTATING or DONE
       case State::STOP_BEFORE_ROTATE: {
         if (!check_runtime_safety()) {
@@ -203,7 +191,7 @@ private:
         // Publish zero velocity for a short settling window before rotating.
         publish_stop();
         double elapsed_stop = (this->now() - stop_start_time_).seconds();
-        
+
         if (elapsed_stop < 0.2) {
           return;
         }
@@ -214,26 +202,22 @@ private:
         }
 
         rotation_start_time_ = this->now();
-        state_ =  State::ROTATING;
+        state_ = State::ROTATING;
         return;
       }
 
       // ROTATING -> DONE after rotate_time_
       case State::ROTATING: {
-        if (!check_runtime_safety()) {
-          return;
-        }
-
-        // Continue publishing angular velocity; a single Twist message is not enough.
+        // During open-loop rotation, the front scan window may point away from the wall.
+        // Do not require a fresh front-distance reading here; bound the motion by time.
         double elapsed = (this->now() - rotation_start_time_).seconds();
         if (elapsed < rotate_time_) {
           publish_rotate();
-        }
-        else {
+        } else {
           publish_stop();
           state_ = State::DONE;
         }
-        
+
         return;
       }
 
@@ -250,7 +234,6 @@ private:
         return;
       }
     }
-      
   }
 
   bool check_runtime_safety()
