@@ -4,6 +4,7 @@ from launch.conditions import IfCondition
 from launch.event_handlers import OnProcessExit
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 
 
@@ -25,12 +26,12 @@ def generate_launch_description():
         output="screen",
         parameters=[
             {
-                "obstacle": obstacle,
-                "degrees": degrees,
-                "final_approach": final_approach,
-                "forward_speed": forward_speed,
-                "angular_speed": angular_speed,
-                "rotation_scale": rotation_scale,
+                "obstacle": ParameterValue(obstacle, value_type=float),
+                "degrees": ParameterValue(degrees, value_type=float),
+                "final_approach": ParameterValue(final_approach, value_type=bool),
+                "forward_speed": ParameterValue(forward_speed, value_type=float),
+                "angular_speed": ParameterValue(angular_speed, value_type=float),
+                "rotation_scale": ParameterValue(rotation_scale, value_type=float),
             }
         ],
     )
