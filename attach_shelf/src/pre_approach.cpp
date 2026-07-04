@@ -102,6 +102,7 @@ private:
                           double & front_distance)
   {
     std::vector<double> valid_ranges;
+    bool saw_clear_ray = false;
 
     // Use a small window around 0 rad instead of a single ray to reduce noise.
     double half_window = window_degrees / 2 * kPi / 180;
@@ -116,7 +117,12 @@ private:
 
       double distance = scan.ranges[index];
 
-      // LaserScan can contain inf/nan or readings outside the sensor's valid range.
+      if (std::isinf(distance) && distance > 0.0) {
+        saw_clear_ray = true;
+        continue;
+      }
+
+      // LaserScan can contain nan or readings outside the sensor's valid range.
       if (!std::isfinite(distance) || distance < scan.range_min || distance > scan.range_max) {
         continue;
       }
@@ -127,6 +133,11 @@ private:
     // The closest valid ray in the front window is the conservative obstacle distance.
     if (!valid_ranges.empty()) {
       front_distance = *std::min_element(valid_ranges.begin(), valid_ranges.end());
+      return true;
+    }
+
+    if (saw_clear_ray) {
+      front_distance = scan.range_max;
       return true;
     }
 

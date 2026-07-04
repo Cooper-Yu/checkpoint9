@@ -109,6 +109,7 @@ private:
                           double & front_distance)
   {
     std::vector<double> valid_ranges;
+    bool saw_clear_ray = false;
     const double half_window = window_degrees / 2.0 * kPi / 180.0;
 
     for (double angle = -half_window; angle < half_window; angle += scan.angle_increment) {
@@ -120,6 +121,11 @@ private:
       }
 
       const double distance = scan.ranges[index];
+      if (std::isinf(distance) && distance > 0.0) {
+        saw_clear_ray = true;
+        continue;
+      }
+
       if (!std::isfinite(distance) || distance < scan.range_min || distance > scan.range_max) {
         continue;
       }
@@ -128,6 +134,11 @@ private:
     }
 
     if (valid_ranges.empty()) {
+      if (saw_clear_ray) {
+        front_distance = scan.range_max;
+        return true;
+      }
+
       return false;
     }
 
