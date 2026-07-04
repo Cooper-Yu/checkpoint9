@@ -24,7 +24,8 @@ public:
     forward_speed_(0.2),
     yaw_tolerance_(0.05),
     movement_timeout_(10.0),
-    conservative_offset_(0.15)
+    conservative_offset_(0.15),
+    max_target_yaw_(0.8)
   {
     scan_sub_ = create_subscription<sensor_msgs::msg::LaserScan>(
       "/scan",
@@ -228,10 +229,27 @@ private:
 
   bool perform_final_approach(const CartFrame & cart_frame)
   {
-    const double target_yaw = std::atan2(cart_frame.y, cart_frame.x);
-    (void)target_yaw;
-
     // TODO: rotate toward cart_frame with timeout.
+    const double target_yaw = std::atan2(cart_frame.y, cart_frame.x);
+
+    if (std::abs(target_yaw) > max_target_yaw_) {
+      RCLCPP_WARN(
+        get_logger(),
+        "Invalid target_yaw: target yaw  %.3f is larger than maximum %.3f",
+        target_yaw,
+        max_target_yaw_
+      );
+      publish_stop();
+      return false;
+    }
+
+    if (std::abs(target_yaw) < yaw_tolerance_) {
+      RCLCPP_INFO(get_logger(), "Target yaw is within tolerance, skipping rotation");
+    }
+
+    const double rotate_time = std::abs(target_yaw) / rotate_speed_;
+    (void)rotate_time;
+
     // TODO: drive toward cart_frame with conservative_offset_.
     // TODO: drive forward 0.30 m more.
     // TODO: publish /elevator_up once after reaching the shelf underside.
@@ -264,6 +282,7 @@ private:
   double yaw_tolerance_;
   double movement_timeout_;
   double conservative_offset_;
+  double max_target_yaw_;
 };
 
 int main(int argc, char ** argv)
