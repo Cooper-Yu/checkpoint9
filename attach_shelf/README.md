@@ -43,7 +43,7 @@ ros2 launch attach_shelf pre_approach.launch.xml use_rviz:=false obstacle:=0.4 d
 Task 2 launch:
 
 ```bash
-ros2 launch attach_shelf attach_to_shelf.launch.xml obstacle:=0.4 degrees:=-90 final_approach:=false
+ros2 launch attach_shelf attach_to_shelf.launch.py obstacle:=0.4 degrees:=-90 final_approach:=false
 ```
 
 Use `final_approach:=true` to request the service server to drive under the shelf and publish `/elevator_up`.

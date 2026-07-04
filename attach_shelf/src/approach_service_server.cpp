@@ -301,7 +301,6 @@ private:
     publish_stop();
 
     std_msgs::msg::String elevator_msg;
-    elevator_msg.data = "up";
     elevator_up_pub_->publish(elevator_msg);
 
     RCLCPP_INFO(get_logger(), "Final approach complete; published /elevator_up");
