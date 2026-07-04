@@ -35,6 +35,7 @@ public:
     declare_parameter<double>("forward_speed", forward_speed_);
     declare_parameter<double>("angular_speed", angular_speed_);
     declare_parameter<double>("rotation_scale", rotation_scale_);
+    // Task 2 maps this launch parameter directly to GoToLoading.attach_to_shelf.
     declare_parameter<bool>("final_approach", final_approach_);
 
     obstacle_ = get_parameter("obstacle").as_double();
@@ -65,6 +66,7 @@ public:
       RCLCPP_ERROR(get_logger(), "Invalid rotation_scale parameter: %.3f", rotation_scale_);
     }
 
+    // Keep the same calibrated open-loop rotation used by Task 1 before calling the service.
     const double target_angle_rad = degrees_ * kPi / 180.0;
     if (std::abs(target_angle_rad) < 1e-6) {
       rotate_time_ = 0.0;
@@ -143,6 +145,8 @@ private:
 
   void timer_callback()
   {
+    // V2 keeps the Task 1 pre-approach state machine; the only new transition is
+    // DONE -> /approach_shelf service call.
     switch (state_) {
       case State::WAITING_FOR_SCAN: {
         publish_stop();
@@ -248,6 +252,7 @@ private:
   {
     publish_stop();
 
+    // DONE is visited by the timer repeatedly, so guard against sending duplicate requests.
     if (service_call_started_) {
       if ((now() - service_request_time_).seconds() > 20.0) {
         enter_safe_stop("/approach_shelf timed out");
@@ -268,6 +273,7 @@ private:
     RCLCPP_INFO(get_logger(), "Calling /approach_shelf with attach_to_shelf=%s",
                 request->attach_to_shelf ? "true" : "false");
 
+    // Use an async response callback so the single-threaded executor can still process the reply.
     approach_client_->async_send_request(
         request, [this](rclcpp::Client<attach_shelf::srv::GoToLoading>::SharedFuture future) {
           const auto response = future.get();
