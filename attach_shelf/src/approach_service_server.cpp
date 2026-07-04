@@ -100,6 +100,8 @@ private:
     std::vector<std::vector<size_t>> clusters;
     std::vector<size_t> current_cluster;
     const size_t n = std::min(scan.ranges.size(), scan.intensities.size());
+    size_t high_intensity_ray_count = 0;
+    float max_intensity = 0.0F;
 
     for (size_t i = 0; i < n; i++) {
       const float intensity = scan.intensities[i];
@@ -108,6 +110,7 @@ private:
       if (!std::isfinite(intensity)) {
         continue;
       }
+      max_intensity = std::max(max_intensity, intensity);
 
       if (!std::isfinite(range) || range < scan.range_min || range > scan.range_max) {
         if (current_cluster.size() >= static_cast<size_t>(min_cluster_size_)) {
@@ -118,6 +121,7 @@ private:
       }
 
       if (scan.intensities[i] > intensity_threshold_) {
+        ++high_intensity_ray_count;
         current_cluster.push_back(static_cast<size_t>(i));
       } else {
         if (current_cluster.size() >= static_cast<size_t>(min_cluster_size_)) {
@@ -132,6 +136,10 @@ private:
     }
 
     if (clusters.size() < 2) {
+      RCLCPP_WARN(get_logger(),
+                  "Cannot detect cart_frame: found %zu reflective clusters, need at least 2 "
+                  "(high_intensity_rays=%zu, max_intensity=%.1f, threshold=%.1f)",
+                  clusters.size(), high_intensity_ray_count, max_intensity, intensity_threshold_);
       return std::nullopt;
     }
 
@@ -187,6 +195,10 @@ private:
       return std::nullopt;
     }
 
+    RCLCPP_INFO(get_logger(),
+                "Detected cart_frame: x=%.3f, y=%.3f, leg1=(%.3f, %.3f), leg2=(%.3f, %.3f), "
+                "separation=%.3f",
+                x, y, x_1, y_1, x_2, y_2, leg_separation);
     return CartFrame{x, y, scan.header.frame_id};
   }
 
@@ -211,6 +223,9 @@ private:
   {
     // First align the robot with cart_frame before driving forward.
     const double target_yaw = std::atan2(cart_frame.y, cart_frame.x);
+    RCLCPP_INFO(get_logger(),
+                "Starting final approach: target_yaw=%.3f rad, cart_frame=(%.3f, %.3f)", target_yaw,
+                cart_frame.x, cart_frame.y);
 
     if (std::abs(target_yaw) > max_target_yaw_) {
       RCLCPP_WARN(get_logger(), "Invalid target_yaw: target yaw  %.3f is larger than maximum %.3f",
