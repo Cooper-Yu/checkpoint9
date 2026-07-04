@@ -68,20 +68,29 @@ private:
     if (!cart_frame.has_value()) {
       publish_stop();
       response->complete = false;
+      RCLCPP_WARN(get_logger(),
+                  "/approach_shelf response complete=false: cart_frame detection failed");
       return;
     }
 
     publish_cart_frame(cart_frame.value());
+    RCLCPP_INFO(get_logger(), "Published cart_frame TF in frame '%s'",
+                cart_frame->frame_id.c_str());
 
     if (!request->attach_to_shelf) {
       response->complete = true;
+      RCLCPP_INFO(get_logger(), "/approach_shelf response complete=true: detection-only request");
       return;
     }
 
     response->complete = perform_final_approach(cart_frame.value());
     if (!response->complete) {
       publish_stop();
+      RCLCPP_WARN(get_logger(), "/approach_shelf response complete=false: final approach failed");
+      return;
     }
+
+    RCLCPP_INFO(get_logger(), "/approach_shelf response complete=true: final approach finished");
   }
 
   std::optional<CartFrame> detect_cart_frame()
@@ -250,6 +259,8 @@ private:
       cmd.angular.z = target_yaw > 0.0 ? rotate_speed_ : -rotate_speed_;
       const auto start_time = now();
       rclcpp::Rate rate(20.0);
+      RCLCPP_INFO(get_logger(), "Rotating toward cart_frame: angular_z=%.3f rad/s, duration=%.3f s",
+                  cmd.angular.z, rotate_time);
 
       while (rclcpp::ok() && (now() - start_time).seconds() < rotate_time) {
         cmd_vel_pub_->publish(cmd);
@@ -284,6 +295,9 @@ private:
 
     const auto start_time = now();
     rclcpp::Rate rate(20.0);
+    RCLCPP_INFO(get_logger(),
+                "Driving toward cart_frame: distance=%.3f m, speed=%.3f m/s, duration=%.3f s",
+                drive_distance, forward_speed_, drive_time);
 
     while (rclcpp::ok() && (now() - start_time).seconds() < drive_time) {
       cmd_vel_pub_->publish(cmd);
@@ -307,6 +321,8 @@ private:
     final_cmd.linear.x = forward_speed_;
 
     const auto final_start_time = now();
+    RCLCPP_INFO(get_logger(), "Final shelf push: distance=%.3f m, speed=%.3f m/s, duration=%.3f s",
+                final_drive_distance, forward_speed_, final_drive_time);
 
     while (rclcpp::ok() && (now() - final_start_time).seconds() < final_drive_time) {
       cmd_vel_pub_->publish(final_cmd);

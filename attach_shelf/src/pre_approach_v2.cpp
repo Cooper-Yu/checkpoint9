@@ -27,6 +27,7 @@ public:
         rotate_time_(0.0),
         invalid_scan_count_(0),
         state_(State::WAITING_FOR_SCAN),
+        last_logged_state_(State::WAITING_FOR_SCAN),
         service_call_started_(false),
         shutdown_requested_(false)
   {
@@ -84,8 +85,9 @@ public:
     control_timer_ = create_wall_timer(100ms, std::bind(&PreApproachV2::timer_callback, this));
 
     RCLCPP_INFO(get_logger(),
-                "pre_approach_v2 started: obstacle=%.2f m, degrees=%.2f, final_approach=%s",
-                obstacle_, degrees_, final_approach_ ? "true" : "false");
+                "pre_approach_v2 started: obstacle=%.2f m, degrees=%.2f, final_approach=%s, "
+                "rotate_time=%.2f s",
+                obstacle_, degrees_, final_approach_ ? "true" : "false", rotate_time_);
   }
 
 private:
@@ -140,13 +142,20 @@ private:
       front_distance_ = distance;
       last_valid_scan_time_ = now();
       invalid_scan_count_ = 0;
+      RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 2000,
+                           "Valid front scan: distance=%.3f m, obstacle=%.3f m", distance,
+                           obstacle_);
     } else {
       ++invalid_scan_count_;
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000,
+                           "Invalid front scan window: invalid_count=%d", invalid_scan_count_);
     }
   }
 
   void timer_callback()
   {
+    log_state_if_changed();
+
     // V2 keeps the Task 1 pre-approach state machine; the only new transition is
     // DONE -> /approach_shelf service call.
     switch (state_) {
@@ -158,12 +167,12 @@ private:
         }
 
         if (front_distance_.value() > obstacle_) {
-          state_ = State::MOVING_FORWARD;
+          set_state(State::MOVING_FORWARD, "front distance is greater than obstacle threshold");
           return;
         }
 
         stop_start_time_ = now();
-        state_ = State::STOP_BEFORE_ROTATE;
+        set_state(State::STOP_BEFORE_ROTATE, "already within obstacle threshold");
         return;
       }
 
@@ -176,7 +185,7 @@ private:
         if (front_distance_.value() <= obstacle_) {
           publish_stop();
           stop_start_time_ = now();
-          state_ = State::STOP_BEFORE_ROTATE;
+          set_state(State::STOP_BEFORE_ROTATE, "front distance reached obstacle threshold");
         }
         return;
       }
@@ -193,12 +202,12 @@ private:
         }
 
         if (std::abs(degrees_) < 1e-6) {
-          state_ = State::DONE;
+          set_state(State::DONE, "degrees is zero");
           return;
         }
 
         rotation_start_time_ = now();
-        state_ = State::ROTATING;
+        set_state(State::ROTATING, "settling stop complete");
         return;
       }
 
@@ -212,7 +221,7 @@ private:
           publish_rotate();
         } else {
           publish_stop();
-          state_ = State::DONE;
+          set_state(State::DONE, "rotation duration complete");
         }
         return;
       }
@@ -259,6 +268,46 @@ private:
     return true;
   }
 
+  const char * state_name(State state) const
+  {
+    switch (state) {
+      case State::WAITING_FOR_SCAN:
+        return "WAITING_FOR_SCAN";
+      case State::MOVING_FORWARD:
+        return "MOVING_FORWARD";
+      case State::STOP_BEFORE_ROTATE:
+        return "STOP_BEFORE_ROTATE";
+      case State::ROTATING:
+        return "ROTATING";
+      case State::DONE:
+        return "DONE";
+      case State::SAFE_STOP:
+        return "SAFE_STOP";
+    }
+    return "UNKNOWN";
+  }
+
+  void set_state(State next_state, const std::string & reason)
+  {
+    if (state_ == next_state) {
+      return;
+    }
+
+    RCLCPP_INFO(get_logger(), "State transition: %s -> %s (%s)", state_name(state_),
+                state_name(next_state), reason.c_str());
+    state_ = next_state;
+  }
+
+  void log_state_if_changed()
+  {
+    if (last_logged_state_ == state_) {
+      return;
+    }
+
+    RCLCPP_INFO(get_logger(), "Current state: %s", state_name(state_));
+    last_logged_state_ = state_;
+  }
+
   void call_approach_service_once()
   {
     publish_stop();
@@ -288,6 +337,8 @@ private:
     approach_client_->async_send_request(
         request, [this](rclcpp::Client<attach_shelf::srv::GoToLoading>::SharedFuture future) {
           const auto response = future.get();
+          RCLCPP_INFO(get_logger(), "/approach_shelf response: complete=%s",
+                      response->complete ? "true" : "false");
           if (!response->complete) {
             enter_safe_stop("/approach_shelf returned complete=false");
             return;
@@ -326,7 +377,7 @@ private:
   {
     safety_stop_reason_ = reason;
     RCLCPP_ERROR(get_logger(), "SAFE_STOP: %s", reason.c_str());
-    state_ = State::SAFE_STOP;
+    set_state(State::SAFE_STOP, reason);
     publish_stop();
   }
 
@@ -359,6 +410,7 @@ private:
   int invalid_scan_count_;
 
   State state_;
+  State last_logged_state_;
   rclcpp::Time rotation_start_time_;
   rclcpp::Time stop_start_time_;
   rclcpp::Time service_request_time_;
