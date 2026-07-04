@@ -10,7 +10,7 @@ From `~/ros2_ws`:
 
 ```bash
 source install/setup.bash
-ros2 launch attach_shelf attach_to_shelf.launch.py obstacle:=0.4 degrees:=-90 final_approach:=true 2>&1 | tee ~/ros2_ws/src/checkpoint9/local_runtime_logs/attach_to_shelf_latest.log
+ros2 launch attach_shelf attach_to_shelf.launch.py obstacle:=0.4 degrees:=-90 final_approach:=true use_rviz:=false 2>&1 | tee ~/ros2_ws/src/checkpoint9/local_runtime_logs/attach_to_shelf_latest.log
 ```
 
 ## Capture Pre-Approach Only
@@ -19,7 +19,7 @@ From `~/ros2_ws`:
 
 ```bash
 source install/setup.bash
-ros2 launch attach_shelf attach_to_shelf.launch.py obstacle:=0.4 degrees:=-90 final_approach:=false 2>&1 | tee ~/ros2_ws/src/checkpoint9/local_runtime_logs/pre_approach_latest.log
+ros2 launch attach_shelf attach_to_shelf.launch.py obstacle:=0.4 degrees:=-90 final_approach:=false use_rviz:=false 2>&1 | tee ~/ros2_ws/src/checkpoint9/local_runtime_logs/pre_approach_latest.log
 ```
 
 ## Print Useful Debug Lines
