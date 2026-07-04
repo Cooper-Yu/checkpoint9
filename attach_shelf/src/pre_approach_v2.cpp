@@ -73,7 +73,7 @@ public:
     }
 
     cmd_vel_pub_ = create_publisher<geometry_msgs::msg::Twist>("/cmd_vel", 10);
-    approach_client_ = create_client<attach_shelf::srv::GoToLoading>("/approach_service");
+    approach_client_ = create_client<attach_shelf::srv::GoToLoading>("/approach_shelf");
 
     scan_sub_ = create_subscription<sensor_msgs::msg::LaserScan>(
         "/scan", rclcpp::SensorDataQoS(),
@@ -250,7 +250,7 @@ private:
 
     if (service_call_started_) {
       if ((now() - service_request_time_).seconds() > 20.0) {
-        enter_safe_stop("/approach_service timed out");
+        enter_safe_stop("/approach_shelf timed out");
       }
       return;
     }
@@ -258,21 +258,21 @@ private:
     service_request_time_ = now();
 
     if (!approach_client_->wait_for_service(3s)) {
-      enter_safe_stop("/approach_service is not available");
+      enter_safe_stop("/approach_shelf is not available");
       return;
     }
 
     auto request = std::make_shared<attach_shelf::srv::GoToLoading::Request>();
     request->attach_to_shelf = final_approach_;
 
-    RCLCPP_INFO(get_logger(), "Calling /approach_service with attach_to_shelf=%s",
+    RCLCPP_INFO(get_logger(), "Calling /approach_shelf with attach_to_shelf=%s",
                 request->attach_to_shelf ? "true" : "false");
 
     approach_client_->async_send_request(
         request, [this](rclcpp::Client<attach_shelf::srv::GoToLoading>::SharedFuture future) {
           const auto response = future.get();
           if (!response->complete) {
-            enter_safe_stop("/approach_service returned complete=false");
+            enter_safe_stop("/approach_shelf returned complete=false");
             return;
           }
 

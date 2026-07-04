@@ -14,7 +14,7 @@ The `pre_approach` node:
 
 The Task 2 flow adds:
 
-- `pre_approach_v2`, which runs the same pre-approach state machine and then calls `/approach_service`;
+- `pre_approach_v2`, which runs the same pre-approach state machine and then calls `/approach_shelf`;
 - `approach_service_server`, which detects reflective shelf legs from `/scan`, publishes `cart_frame`, and optionally drives under the shelf;
 - custom service `attach_shelf/srv/GoToLoading` with request field `attach_to_shelf` and response field `complete`.
 
@@ -63,4 +63,4 @@ Use `final_approach:=true` to request the service server to drive under the shel
 - Subscribed topics: `/scan`
 - Published topics: `/cmd_vel`, `/elevator_up`
 - Published TF: `cart_frame`
-- Service: `/approach_service` using `attach_shelf/srv/GoToLoading`
+- Service: `/approach_shelf` using `attach_shelf/srv/GoToLoading`
