@@ -100,6 +100,10 @@ private:
   };
 
   static constexpr double kPi = 3.14159265358979323846;
+  static constexpr double kFrontWindowDegrees = 20.0;
+  static constexpr double kScanPauseTimeout = 1.0;
+  static constexpr double kScanSafeStopTimeout = 3.0;
+  static constexpr int kInvalidScanLimit = 30;
 
   bool get_front_distance(const sensor_msgs::msg::LaserScan & scan, double window_degrees,
                           double & front_distance)
@@ -134,7 +138,7 @@ private:
   void scan_callback(const sensor_msgs::msg::LaserScan::SharedPtr msg)
   {
     double distance = 0.0;
-    if (get_front_distance(*msg, 10.0, distance)) {
+    if (get_front_distance(*msg, kFrontWindowDegrees, distance)) {
       front_distance_ = distance;
       last_valid_scan_time_ = now();
       invalid_scan_count_ = 0;
@@ -233,12 +237,22 @@ private:
       return false;
     }
 
-    if ((now() - last_valid_scan_time_).seconds() > 1.0) {
-      enter_safe_stop("latest valid scan is older than 1.0 seconds");
+    const double scan_age = (now() - last_valid_scan_time_).seconds();
+    if (scan_age > kScanSafeStopTimeout) {
+      enter_safe_stop("latest valid scan exceeded the safe stop timeout");
       return false;
     }
 
-    if (invalid_scan_count_ >= 10) {
+    if (scan_age > kScanPauseTimeout) {
+      RCLCPP_WARN_THROTTLE(
+          get_logger(), *get_clock(), 1000,
+          "Waiting for a fresh front scan before continuing forward; latest is %.2f seconds old",
+          scan_age);
+      publish_stop();
+      return false;
+    }
+
+    if (invalid_scan_count_ >= kInvalidScanLimit) {
       enter_safe_stop("too many consecutive invalid scan windows");
       return false;
     }
