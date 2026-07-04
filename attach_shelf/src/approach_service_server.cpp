@@ -63,6 +63,7 @@ private:
     double x;
     double y;
     double yaw;
+    std::string frame_id;
   };
 
   void scan_callback(const sensor_msgs::msg::LaserScan::SharedPtr msg)
@@ -243,19 +244,37 @@ private:
 
   std::optional<RobotPose> lookup_robot_pose()
   {
-    try {
-      const auto transform =
-          tf_buffer_.lookupTransform("odom", "base_link", tf2::TimePointZero,
-                                     tf2::durationFromSec(0.2));
-      const auto & rotation = transform.transform.rotation;
-      const double siny_cosp = 2.0 * (rotation.w * rotation.z + rotation.x * rotation.y);
-      const double cosy_cosp = 1.0 - 2.0 * (rotation.y * rotation.y + rotation.z * rotation.z);
-      return RobotPose{transform.transform.translation.x, transform.transform.translation.y,
-                       std::atan2(siny_cosp, cosy_cosp)};
-    } catch (const tf2::TransformException & ex) {
-      RCLCPP_WARN(get_logger(), "Cannot read odom->base_link TF: %s", ex.what());
-      return std::nullopt;
+    std::vector<std::string> candidate_frames;
+    if (latest_scan_.has_value() && !latest_scan_->header.frame_id.empty()) {
+      candidate_frames.push_back(latest_scan_->header.frame_id);
     }
+    candidate_frames.push_back("base_link");
+    candidate_frames.push_back("base_footprint");
+    candidate_frames.push_back("robot_base_link");
+    candidate_frames.push_back("robot_base_footprint");
+
+    std::string last_error;
+    for (const auto & frame_id : candidate_frames) {
+      try {
+        const auto transform =
+            tf_buffer_.lookupTransform("odom", frame_id, tf2::TimePointZero,
+                                       tf2::durationFromSec(0.2));
+        const auto & rotation = transform.transform.rotation;
+        const double siny_cosp = 2.0 * (rotation.w * rotation.z + rotation.x * rotation.y);
+        const double cosy_cosp = 1.0 - 2.0 * (rotation.y * rotation.y + rotation.z * rotation.z);
+        RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 5000,
+                             "Using odom->%s TF for final approach feedback", frame_id.c_str());
+        return RobotPose{transform.transform.translation.x, transform.transform.translation.y,
+                         std::atan2(siny_cosp, cosy_cosp), frame_id};
+      } catch (const tf2::TransformException & ex) {
+        last_error = ex.what();
+      }
+    }
+
+    RCLCPP_WARN(get_logger(),
+                "Cannot read robot pose from TF. Tried odom to scan/base frames; last error: %s",
+                last_error.c_str());
+    return std::nullopt;
   }
 
   double normalize_angle(double angle) const
