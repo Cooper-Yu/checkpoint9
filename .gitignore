@@ -1,3 +1,4 @@
 local_training_notes/
+local_runtime_logs/*.log
 __pycache__/
 *.pyc
