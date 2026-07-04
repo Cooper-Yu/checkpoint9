@@ -100,13 +100,80 @@ private:
       RCLCPP_WARN(get_logger(), "Cannot detect cart_frame: scan ranges or intensities are empty");
       return std::nullopt;
     }
-
     // TODO: group adjacent high-intensity rays into clusters.
+    std::vector<std::vector<size_t>> clusters;
+    std::vector<size_t> current_cluster;
+    const size_t n = std::min(scan.ranges.size(), scan.intensities.size());
+
+    for (size_t i = 0; i < n; i++) {
+      const float intensity = scan.intensities[i];
+      const float range = scan.ranges[i];
+
+      if (!std::isfinite(intensity)) {
+        continue;
+      }
+
+      if (!std::isfinite(range) ||
+          range < scan.range_min ||
+          range > scan.range_max) {
+        if (current_cluster.size() >= static_cast<size_t>(min_cluster_size_)) {
+          clusters.push_back(current_cluster);
+        }
+        current_cluster.clear();
+        continue;
+      }
+
+      if (scan.intensities[i] > intensity_threshold_) {
+        current_cluster.push_back(static_cast<size_t>(i));
+      }
+      else {
+        if (current_cluster.size() >= static_cast<size_t>(min_cluster_size_)) {
+          clusters.push_back(current_cluster);
+        }
+        current_cluster.clear();
+      }
+    }
+    // Handle a high-intensity cluster that reaches the end of the scan.
+    if (current_cluster.size() >= static_cast<size_t>(min_cluster_size_)) {
+      clusters.push_back(current_cluster);
+    }
+
     // TODO: choose the two largest valid clusters.
+    if (clusters.size() < 2) {
+      return std::nullopt;
+    }
+
+    std::stable_sort(
+      clusters.begin(),
+      clusters.end(),
+      [](const auto & a, const auto & b) {
+        return a.size() > b.size();
+    });
+
+    const auto & cluster_1 = clusters[0];
+    const auto & cluster_2 = clusters[1];
+
     // TODO: convert representative rays into leg points.
+    const size_t index_1 = cluster_1[cluster_1.size() / 2];
+    const size_t index_2 = cluster_2[cluster_2.size() / 2];
+    double angle_1 = scan.angle_min + index_1 * scan.angle_increment;
+    double range_1 = scan.ranges[index_1];
+    const double x_1 = range_1 * std::cos(angle_1);
+    const double y_1 = range_1 * std::sin(angle_1);
+    double angle_2 = scan.angle_min + index_2 * scan.angle_increment;
+    double range_2 = scan.ranges[index_2];
+    const double x_2 = range_2 * std::cos(angle_2);
+    const double y_2 = range_2 * std::sin(angle_2);
+
     // TODO: run geometry sanity checks and return the midpoint.
-    RCLCPP_WARN(get_logger(), "cart_frame detection is not implemented yet");
-    return std::nullopt;
+    if (x_1 <= 0.0 || x_2 <= 0.0) {
+      RCLCPP_WARN(get_logger(), "cart_frame detection is not implemented yet");
+      return std::nullopt;
+    }
+
+    const double x = (x_1 + x_2) / 2;
+    const double y = (y_1 + y_2) / 2;
+    return CartFrame{x, y, scan.header.frame_id};
   }
 
   void publish_cart_frame(const CartFrame & cart_frame)
