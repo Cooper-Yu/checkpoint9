@@ -30,7 +30,8 @@ public:
         movement_timeout_(10.0),
         conservative_offset_(0.15),
         max_target_yaw_(0.8),
-        target_x_before_push_(0.35),
+        max_step_yaw_(0.2),
+        target_x_before_push_(0.50),
         forward_step_distance_(0.10),
         final_drive_distance_(0.30)
   {
@@ -343,6 +344,13 @@ private:
                   "Final approach step %d: cart_frame=(%.3f, %.3f), target_yaw=%.3f",
                   step_count, cart_frame.x, cart_frame.y, target_yaw);
 
+      if (cart_frame.x <= target_x_before_push_) {
+        RCLCPP_INFO(get_logger(),
+                    "cart_frame x %.3f is within final approach target %.3f; starting final push",
+                    cart_frame.x, target_x_before_push_);
+        break;
+      }
+
       if (std::abs(target_yaw) > max_target_yaw_) {
         RCLCPP_WARN(get_logger(), "Invalid target_yaw: target yaw %.3f is larger than maximum %.3f",
                     target_yaw, max_target_yaw_);
@@ -350,15 +358,16 @@ private:
         return false;
       }
 
-      if (!rotate_by_yaw_open_loop(target_yaw)) {
-        return false;
+      const double yaw_correction = std::clamp(target_yaw, -max_step_yaw_, max_step_yaw_);
+      if (std::abs(target_yaw) > max_step_yaw_) {
+        RCLCPP_WARN(get_logger(),
+                    "Clamping yaw correction from %.3f to %.3f rad to avoid reacting to a noisy "
+                    "near-field cart_frame",
+                    target_yaw, yaw_correction);
       }
 
-      if (cart_frame.x <= target_x_before_push_) {
-        RCLCPP_INFO(get_logger(),
-                    "cart_frame x %.3f is within final approach target %.3f; starting final push",
-                    cart_frame.x, target_x_before_push_);
-        break;
+      if (!rotate_by_yaw_open_loop(yaw_correction)) {
+        return false;
       }
 
       const double step_distance =
@@ -426,6 +435,7 @@ private:
   double movement_timeout_;
   double conservative_offset_;
   double max_target_yaw_;
+  double max_step_yaw_;
   double target_x_before_push_;
   double forward_step_distance_;
   double final_drive_distance_;
