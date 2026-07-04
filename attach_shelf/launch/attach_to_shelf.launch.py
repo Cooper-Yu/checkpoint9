@@ -1,5 +1,5 @@
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, RegisterEventHandler, Shutdown
+from launch.actions import DeclareLaunchArgument, ExecuteProcess, RegisterEventHandler, Shutdown
 from launch.conditions import IfCondition, UnlessCondition
 from launch.event_handlers import OnProcessExit
 from launch.substitutions import LaunchConfiguration
@@ -19,7 +19,7 @@ def generate_launch_description():
 
     rviz_config = [FindPackageShare("attach_shelf"), "/rviz/pre_approach.rviz"]
 
-    pre_approach_task1 = Node(
+    pre_approach_only = Node(
         package="attach_shelf",
         executable="pre_approach",
         name="pre_approach",
@@ -36,21 +36,33 @@ def generate_launch_description():
         condition=UnlessCondition(final_approach),
     )
 
-    pre_approach_v2 = Node(
+    pre_approach_before_attach = Node(
         package="attach_shelf",
-        executable="pre_approach_v2",
-        name="pre_approach_v2",
+        executable="pre_approach",
+        name="pre_approach",
         output="screen",
         parameters=[
             {
                 "obstacle": ParameterValue(obstacle, value_type=float),
                 "degrees": ParameterValue(degrees, value_type=float),
-                "final_approach": ParameterValue(final_approach, value_type=bool),
                 "forward_speed": ParameterValue(forward_speed, value_type=float),
                 "angular_speed": ParameterValue(angular_speed, value_type=float),
                 "rotation_scale": ParameterValue(rotation_scale, value_type=float),
             }
         ],
+        condition=IfCondition(final_approach),
+    )
+
+    approach_service_call = ExecuteProcess(
+        cmd=[
+            "ros2",
+            "service",
+            "call",
+            "/approach_shelf",
+            "attach_shelf/srv/GoToLoading",
+            "{attach_to_shelf: true}",
+        ],
+        output="screen",
         condition=IfCondition(final_approach),
     )
 
@@ -78,13 +90,19 @@ def generate_launch_description():
                 output="screen",
                 condition=IfCondition(final_approach),
             ),
-            pre_approach_task1,
-            pre_approach_v2,
+            pre_approach_only,
+            pre_approach_before_attach,
             RegisterEventHandler(
-                OnProcessExit(target_action=pre_approach_v2, on_exit=[Shutdown()])
+                OnProcessExit(
+                    target_action=pre_approach_before_attach,
+                    on_exit=[approach_service_call],
+                )
             ),
             RegisterEventHandler(
-                OnProcessExit(target_action=pre_approach_task1, on_exit=[Shutdown()])
+                OnProcessExit(target_action=approach_service_call, on_exit=[Shutdown()])
+            ),
+            RegisterEventHandler(
+                OnProcessExit(target_action=pre_approach_only, on_exit=[Shutdown()])
             ),
         ]
     )
