@@ -185,24 +185,22 @@ private:
           return;
         }
 
-        // Move forward until the front obstacle reaches the requested distance.
-        publish_forward();
-
         if (front_distance_.value() <= obstacle_) {
           publish_stop();
           stop_start_time_ = this->now();
           state_ = State::STOP_BEFORE_ROTATE;
+          RCLCPP_INFO(get_logger(), "Reached obstacle distance %.2f m; preparing to rotate",
+                      front_distance_.value());
+          return;
         }
 
+        // Move forward only while the latest front distance is still outside the stop threshold.
+        publish_forward();
         return;
       }
 
       // STOP_BEFORE_ROTATE -> ROTATING or DONE
       case State::STOP_BEFORE_ROTATE: {
-        if (!check_runtime_safety()) {
-          return;
-        }
-
         // Publish zero velocity for a short settling window before rotating.
         publish_stop();
         double elapsed_stop = (this->now() - stop_start_time_).seconds();
@@ -218,6 +216,7 @@ private:
 
         rotation_start_time_ = this->now();
         state_ = State::ROTATING;
+        RCLCPP_INFO(get_logger(), "Starting open-loop rotation for %.2f seconds", rotate_time_);
         return;
       }
 

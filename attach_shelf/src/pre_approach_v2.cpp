@@ -185,20 +185,20 @@ private:
           return;
         }
 
-        publish_forward();
         if (front_distance_.value() <= obstacle_) {
           publish_stop();
           stop_start_time_ = now();
           state_ = State::STOP_BEFORE_ROTATE;
+          RCLCPP_INFO(get_logger(), "Reached obstacle distance %.2f m; preparing to rotate",
+                      front_distance_.value());
+          return;
         }
+
+        publish_forward();
         return;
       }
 
       case State::STOP_BEFORE_ROTATE: {
-        if (!check_runtime_safety()) {
-          return;
-        }
-
         publish_stop();
         const double elapsed_stop = (now() - stop_start_time_).seconds();
         if (elapsed_stop < 0.2) {
@@ -212,6 +212,7 @@ private:
 
         rotation_start_time_ = now();
         state_ = State::ROTATING;
+        RCLCPP_INFO(get_logger(), "Starting open-loop rotation for %.2f seconds", rotate_time_);
         return;
       }
 
