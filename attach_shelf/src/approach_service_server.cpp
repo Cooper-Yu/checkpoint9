@@ -1,7 +1,9 @@
+#include <algorithm>
 #include <cmath>
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "attach_shelf/srv/go_to_loading.hpp"
 #include "geometry_msgs/msg/transform_stamped.hpp"
@@ -15,34 +17,29 @@ class ApproachServiceServer : public rclcpp::Node
 {
 public:
   ApproachServiceServer()
-  : Node("approach_service_server"),
-    intensity_threshold_(8000.0),
-    min_cluster_size_(2),
-    max_x_difference_(0.35),
-    min_leg_separation_(0.25),
-    rotate_speed_(0.3),
-    forward_speed_(0.2),
-    yaw_tolerance_(0.05),
-    movement_timeout_(10.0),
-    conservative_offset_(0.15),
-    max_target_yaw_(0.8)
+      : Node("approach_service_server"),
+        intensity_threshold_(8000.0),
+        min_cluster_size_(2),
+        max_x_difference_(0.35),
+        min_leg_separation_(0.25),
+        rotate_speed_(0.3),
+        forward_speed_(0.2),
+        yaw_tolerance_(0.05),
+        movement_timeout_(10.0),
+        conservative_offset_(0.15),
+        max_target_yaw_(0.8)
   {
     scan_sub_ = create_subscription<sensor_msgs::msg::LaserScan>(
-      "/scan",
-      rclcpp::SensorDataQoS(),
-      std::bind(&ApproachServiceServer::scan_callback, this, std::placeholders::_1));
+        "/scan", rclcpp::SensorDataQoS(),
+        std::bind(&ApproachServiceServer::scan_callback, this, std::placeholders::_1));
 
     cmd_vel_pub_ = create_publisher<geometry_msgs::msg::Twist>("/cmd_vel", 10);
     elevator_up_pub_ = create_publisher<std_msgs::msg::String>("/elevator_up", 10);
     tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
 
     approach_service_ = create_service<attach_shelf::srv::GoToLoading>(
-      "/approach_shelf",
-      std::bind(
-        &ApproachServiceServer::handle_approach_request,
-        this,
-        std::placeholders::_1,
-        std::placeholders::_2));
+        "/approach_shelf", std::bind(&ApproachServiceServer::handle_approach_request, this,
+                                     std::placeholders::_1, std::placeholders::_2));
 
     RCLCPP_INFO(get_logger(), "approach_service_server ready on /approach_shelf");
   }
@@ -61,13 +58,11 @@ private:
   }
 
   void handle_approach_request(
-    const std::shared_ptr<attach_shelf::srv::GoToLoading::Request> request,
-    std::shared_ptr<attach_shelf::srv::GoToLoading::Response> response)
+      const std::shared_ptr<attach_shelf::srv::GoToLoading::Request> request,
+      std::shared_ptr<attach_shelf::srv::GoToLoading::Response> response)
   {
-    RCLCPP_INFO(
-      get_logger(),
-      "Received /approach_shelf request: attach_to_shelf=%s",
-      request->attach_to_shelf ? "true" : "false");
+    RCLCPP_INFO(get_logger(), "Received /approach_shelf request: attach_to_shelf=%s",
+                request->attach_to_shelf ? "true" : "false");
 
     auto cart_frame = detect_cart_frame();
     if (!cart_frame.has_value()) {
@@ -101,7 +96,7 @@ private:
       RCLCPP_WARN(get_logger(), "Cannot detect cart_frame: scan ranges or intensities are empty");
       return std::nullopt;
     }
-    // TODO: group adjacent high-intensity rays into clusters.
+    // Adjacent high-intensity rays are treated as one reflective shelf leg candidate.
     std::vector<std::vector<size_t>> clusters;
     std::vector<size_t> current_cluster;
     const size_t n = std::min(scan.ranges.size(), scan.intensities.size());
@@ -114,9 +109,7 @@ private:
         continue;
       }
 
-      if (!std::isfinite(range) ||
-          range < scan.range_min ||
-          range > scan.range_max) {
+      if (!std::isfinite(range) || range < scan.range_min || range > scan.range_max) {
         if (current_cluster.size() >= static_cast<size_t>(min_cluster_size_)) {
           clusters.push_back(current_cluster);
         }
@@ -126,8 +119,7 @@ private:
 
       if (scan.intensities[i] > intensity_threshold_) {
         current_cluster.push_back(static_cast<size_t>(i));
-      }
-      else {
+      } else {
         if (current_cluster.size() >= static_cast<size_t>(min_cluster_size_)) {
           clusters.push_back(current_cluster);
         }
@@ -139,22 +131,17 @@ private:
       clusters.push_back(current_cluster);
     }
 
-    // TODO: choose the two largest valid clusters.
     if (clusters.size() < 2) {
       return std::nullopt;
     }
 
-    std::stable_sort(
-      clusters.begin(),
-      clusters.end(),
-      [](const auto & a, const auto & b) {
-        return a.size() > b.size();
-    });
+    std::stable_sort(clusters.begin(), clusters.end(),
+                     [](const auto & a, const auto & b) { return a.size() > b.size(); });
 
     const auto & cluster_1 = clusters[0];
     const auto & cluster_2 = clusters[1];
 
-    // TODO: convert representative rays into leg points.
+    // Use the middle ray of each cluster as a stable representative leg point.
     const size_t index_1 = cluster_1[cluster_1.size() / 2];
     const size_t index_2 = cluster_2[cluster_2.size() / 2];
     double angle_1 = scan.angle_min + index_1 * scan.angle_increment;
@@ -166,33 +153,29 @@ private:
     const double x_2 = range_2 * std::cos(angle_2);
     const double y_2 = range_2 * std::sin(angle_2);
 
-    // TODO: run geometry sanity checks and return the midpoint.
+    // Reject detections that do not look like two shelf legs in front of the robot.
     if (x_1 <= 0.0 || x_2 <= 0.0) {
-      RCLCPP_WARN(
-        get_logger(),
-        "Invalid shelf leg geometry: leg points must be in front of the robot, got x1=%.3f, x2=%.3f",
-        x_1,
-        x_2);
+      RCLCPP_WARN(get_logger(),
+                  "Invalid shelf leg geometry: leg points must be in front of the robot, got "
+                  "x1=%.3f, x2=%.3f",
+                  x_1, x_2);
       return std::nullopt;
     }
 
     double leg_separation = std::abs(y_1 - y_2);
     if (leg_separation < min_leg_separation_) {
       RCLCPP_WARN(
-        get_logger(),
-        "Invalid shelf leg geometry: lateral separation %.3f is smaller than minimum %.3f",
-        leg_separation,
-        min_leg_separation_);
+          get_logger(),
+          "Invalid shelf leg geometry: lateral separation %.3f is smaller than minimum %.3f",
+          leg_separation, min_leg_separation_);
       return std::nullopt;
     }
 
     double x_difference = std::abs(x_1 - x_2);
     if (x_difference > max_x_difference_) {
-      RCLCPP_WARN(
-        get_logger(),
-        "Invalid shelf leg geometry: x difference %.3f is larger than maximum %.3f",
-        x_difference,
-        max_x_difference_);
+      RCLCPP_WARN(get_logger(),
+                  "Invalid shelf leg geometry: x difference %.3f is larger than maximum %.3f",
+                  x_difference, max_x_difference_);
       return std::nullopt;
     }
 
@@ -200,10 +183,7 @@ private:
     const double y = (y_1 + y_2) / 2;
 
     if (x <= 0.0) {
-      RCLCPP_WARN(
-        get_logger(),
-        "Invalid cart_frame: midpoint x %.3f must be positive",
-        x);
+      RCLCPP_WARN(get_logger(), "Invalid cart_frame: midpoint x %.3f must be positive", x);
       return std::nullopt;
     }
 
@@ -229,32 +209,103 @@ private:
 
   bool perform_final_approach(const CartFrame & cart_frame)
   {
-    // TODO: rotate toward cart_frame with timeout.
+    // First align the robot with cart_frame before driving forward.
     const double target_yaw = std::atan2(cart_frame.y, cart_frame.x);
 
     if (std::abs(target_yaw) > max_target_yaw_) {
-      RCLCPP_WARN(
-        get_logger(),
-        "Invalid target_yaw: target yaw  %.3f is larger than maximum %.3f",
-        target_yaw,
-        max_target_yaw_
-      );
+      RCLCPP_WARN(get_logger(), "Invalid target_yaw: target yaw  %.3f is larger than maximum %.3f",
+                  target_yaw, max_target_yaw_);
       publish_stop();
       return false;
     }
 
     if (std::abs(target_yaw) < yaw_tolerance_) {
       RCLCPP_INFO(get_logger(), "Target yaw is within tolerance, skipping rotation");
+    } else {
+      const double rotate_time = std::abs(target_yaw) / rotate_speed_;
+
+      if (rotate_time > movement_timeout_) {
+        RCLCPP_WARN(get_logger(), "Rotate time %.3f exceeds movement timeout %.3f", rotate_time,
+                    movement_timeout_);
+        publish_stop();
+        return false;
+      }
+
+      geometry_msgs::msg::Twist cmd;
+      cmd.angular.z = target_yaw > 0.0 ? rotate_speed_ : -rotate_speed_;
+      const auto start_time = now();
+      rclcpp::Rate rate(20.0);
+
+      while (rclcpp::ok() && (now() - start_time).seconds() < rotate_time) {
+        cmd_vel_pub_->publish(cmd);
+        rate.sleep();
+      }
+
+      publish_stop();
     }
 
-    const double rotate_time = std::abs(target_yaw) / rotate_speed_;
-    (void)rotate_time;
+    // Stop short of cart_frame so the final push enters under the shelf deliberately.
+    const double drive_distance = cart_frame.x - conservative_offset_;
 
-    // TODO: drive toward cart_frame with conservative_offset_.
-    // TODO: drive forward 0.30 m more.
-    // TODO: publish /elevator_up once after reaching the shelf underside.
-    RCLCPP_WARN(get_logger(), "final approach movement is not implemented yet");
-    return false;
+    if (drive_distance <= 0.0) {
+      RCLCPP_WARN(
+          get_logger(),
+          "Drive distance %.3f is not positive; cart_frame x=%.3f, conservative_offset=%.3f",
+          drive_distance, cart_frame.x, conservative_offset_);
+      publish_stop();
+      return false;
+    }
+
+    const double drive_time = drive_distance / forward_speed_;
+
+    if (drive_time > movement_timeout_) {
+      RCLCPP_WARN(get_logger(), "Drive time %.3f exceeds movement timeout %.3f", drive_time,
+                  movement_timeout_);
+      publish_stop();
+      return false;
+    }
+    geometry_msgs::msg::Twist cmd;
+    cmd.linear.x = forward_speed_;
+
+    const auto start_time = now();
+    rclcpp::Rate rate(20.0);
+
+    while (rclcpp::ok() && (now() - start_time).seconds() < drive_time) {
+      cmd_vel_pub_->publish(cmd);
+      rate.sleep();
+    }
+
+    publish_stop();
+
+    // Final short push moves the robot under the shelf before raising the elevator.
+    const double final_drive_distance = 0.30;
+    const double final_drive_time = final_drive_distance / forward_speed_;
+
+    if (final_drive_time > movement_timeout_) {
+      RCLCPP_WARN(get_logger(), "Final drive time %.3f exceeds movement timeout %.3f",
+                  final_drive_time, movement_timeout_);
+      publish_stop();
+      return false;
+    }
+
+    geometry_msgs::msg::Twist final_cmd;
+    final_cmd.linear.x = forward_speed_;
+
+    const auto final_start_time = now();
+
+    while (rclcpp::ok() && (now() - final_start_time).seconds() < final_drive_time) {
+      cmd_vel_pub_->publish(final_cmd);
+      rate.sleep();
+    }
+
+    publish_stop();
+
+    std_msgs::msg::String elevator_msg;
+    elevator_msg.data = "up";
+    elevator_up_pub_->publish(elevator_msg);
+
+    RCLCPP_INFO(get_logger(), "Final approach complete; published /elevator_up");
+    return true;
   }
 
   void publish_stop()

@@ -1,0 +1,13 @@
+{
+  "editor.formatOnSave": true,
+  "C_Cpp.clang_format_style": "file",
+  "C_Cpp.formatting": "clangFormat",
+  "C_Cpp.default.compileCommands": "/home/cooper/ros2_ws/build/attach_shelf/compile_commands.json",
+  "C_Cpp.default.configurationProvider": "",
+  "[cpp]": {
+    "editor.defaultFormatter": "ms-vscode.cpptools"
+  },
+  "[c]": {
+    "editor.defaultFormatter": "ms-vscode.cpptools"
+  }
+}
