@@ -1,6 +1,6 @@
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, RegisterEventHandler, Shutdown
-from launch.conditions import IfCondition
+from launch.conditions import IfCondition, UnlessCondition
 from launch.event_handlers import OnProcessExit
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -19,6 +19,23 @@ def generate_launch_description():
 
     rviz_config = [FindPackageShare("attach_shelf"), "/rviz/pre_approach.rviz"]
 
+    pre_approach_task1 = Node(
+        package="attach_shelf",
+        executable="pre_approach",
+        name="pre_approach",
+        output="screen",
+        parameters=[
+            {
+                "obstacle": ParameterValue(obstacle, value_type=float),
+                "degrees": ParameterValue(degrees, value_type=float),
+                "forward_speed": ParameterValue(forward_speed, value_type=float),
+                "angular_speed": ParameterValue(angular_speed, value_type=float),
+                "rotation_scale": ParameterValue(rotation_scale, value_type=float),
+            }
+        ],
+        condition=UnlessCondition(final_approach),
+    )
+
     pre_approach_v2 = Node(
         package="attach_shelf",
         executable="pre_approach_v2",
@@ -34,6 +51,7 @@ def generate_launch_description():
                 "rotation_scale": ParameterValue(rotation_scale, value_type=float),
             }
         ],
+        condition=IfCondition(final_approach),
     )
 
     return LaunchDescription(
@@ -58,10 +76,15 @@ def generate_launch_description():
                 executable="approach_service_server",
                 name="approach_service_server",
                 output="screen",
+                condition=IfCondition(final_approach),
             ),
+            pre_approach_task1,
             pre_approach_v2,
             RegisterEventHandler(
                 OnProcessExit(target_action=pre_approach_v2, on_exit=[Shutdown()])
+            ),
+            RegisterEventHandler(
+                OnProcessExit(target_action=pre_approach_task1, on_exit=[Shutdown()])
             ),
         ]
     )
