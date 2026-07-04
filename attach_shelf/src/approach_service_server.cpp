@@ -129,7 +129,7 @@ private:
         continue;
       }
 
-      if (scan.intensities[i] > intensity_threshold_) {
+      if (scan.intensities[i] >= intensity_threshold_) {
         ++high_intensity_ray_count;
         current_cluster.push_back(static_cast<size_t>(i));
       } else {
