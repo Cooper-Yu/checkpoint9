@@ -50,7 +50,7 @@ public:
     approach_service_ = create_service<attach_shelf::srv::GoToLoading>(
         "/approach_shelf", std::bind(&ApproachServiceServer::handle_approach_request, this,
                                      std::placeholders::_1, std::placeholders::_2),
-        rclcpp::ServicesQoS(), service_callback_group_);
+        rmw_qos_profile_services_default, service_callback_group_);
 
     RCLCPP_INFO(get_logger(), "approach_service_server ready on /approach_shelf");
   }
