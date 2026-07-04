@@ -8,14 +8,11 @@
 #include "attach_shelf/srv/go_to_loading.hpp"
 #include "geometry_msgs/msg/transform_stamped.hpp"
 #include "geometry_msgs/msg/twist.hpp"
+#include "rclcpp/executors/multi_threaded_executor.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/laser_scan.hpp"
 #include "std_msgs/msg/string.hpp"
-#include "tf2/exceptions.h"
-#include "tf2/time.h"
 #include "tf2_ros/transform_broadcaster.h"
-#include "tf2_ros/buffer.h"
-#include "tf2_ros/transform_listener.h"
 
 class ApproachServiceServer : public rclcpp::Node
 {
@@ -32,20 +29,27 @@ public:
         movement_timeout_(10.0),
         conservative_offset_(0.15),
         max_target_yaw_(0.8),
-        tf_buffer_(get_clock())
+        target_x_before_push_(0.35),
+        forward_step_distance_(0.15),
+        final_drive_distance_(0.30)
   {
+    scan_callback_group_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+    service_callback_group_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+
+    rclcpp::SubscriptionOptions scan_options;
+    scan_options.callback_group = scan_callback_group_;
     scan_sub_ = create_subscription<sensor_msgs::msg::LaserScan>(
         "/scan", rclcpp::SensorDataQoS(),
-        std::bind(&ApproachServiceServer::scan_callback, this, std::placeholders::_1));
+        std::bind(&ApproachServiceServer::scan_callback, this, std::placeholders::_1), scan_options);
 
     cmd_vel_pub_ = create_publisher<geometry_msgs::msg::Twist>("/cmd_vel", 10);
     elevator_up_pub_ = create_publisher<std_msgs::msg::String>("/elevator_up", 10);
     tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
-    tf_listener_ = std::make_unique<tf2_ros::TransformListener>(tf_buffer_);
 
     approach_service_ = create_service<attach_shelf::srv::GoToLoading>(
         "/approach_shelf", std::bind(&ApproachServiceServer::handle_approach_request, this,
-                                     std::placeholders::_1, std::placeholders::_2));
+                                     std::placeholders::_1, std::placeholders::_2),
+        rclcpp::ServicesQoS(), service_callback_group_);
 
     RCLCPP_INFO(get_logger(), "approach_service_server ready on /approach_shelf");
   }
@@ -55,14 +59,6 @@ private:
   {
     double x;
     double y;
-    std::string frame_id;
-  };
-
-  struct RobotPose
-  {
-    double x;
-    double y;
-    double yaw;
     std::string frame_id;
   };
 
@@ -242,62 +238,17 @@ private:
     tf_broadcaster_->sendTransform(transform);
   }
 
-  std::optional<RobotPose> lookup_robot_pose()
-  {
-    std::vector<std::string> candidate_frames;
-    if (latest_scan_.has_value() && !latest_scan_->header.frame_id.empty()) {
-      candidate_frames.push_back(latest_scan_->header.frame_id);
-    }
-    candidate_frames.push_back("base_link");
-    candidate_frames.push_back("base_footprint");
-    candidate_frames.push_back("robot_base_link");
-    candidate_frames.push_back("robot_base_footprint");
-
-    std::string last_error;
-    for (const auto & frame_id : candidate_frames) {
-      try {
-        const auto transform =
-            tf_buffer_.lookupTransform("odom", frame_id, tf2::TimePointZero,
-                                       tf2::durationFromSec(0.2));
-        const auto & rotation = transform.transform.rotation;
-        const double siny_cosp = 2.0 * (rotation.w * rotation.z + rotation.x * rotation.y);
-        const double cosy_cosp = 1.0 - 2.0 * (rotation.y * rotation.y + rotation.z * rotation.z);
-        RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 5000,
-                             "Using odom->%s TF for final approach feedback", frame_id.c_str());
-        return RobotPose{transform.transform.translation.x, transform.transform.translation.y,
-                         std::atan2(siny_cosp, cosy_cosp), frame_id};
-      } catch (const tf2::TransformException & ex) {
-        last_error = ex.what();
-      }
-    }
-
-    RCLCPP_WARN(get_logger(),
-                "Cannot read robot pose from TF. Tried odom to scan/base frames; last error: %s",
-                last_error.c_str());
-    return std::nullopt;
-  }
-
-  double normalize_angle(double angle) const
-  {
-    constexpr double pi = 3.14159265358979323846;
-    while (angle > pi) {
-      angle -= 2.0 * pi;
-    }
-    while (angle < -pi) {
-      angle += 2.0 * pi;
-    }
-    return angle;
-  }
-
-  bool rotate_by_yaw(double target_yaw)
+  bool rotate_by_yaw_open_loop(double target_yaw)
   {
     if (std::abs(target_yaw) < yaw_tolerance_) {
       RCLCPP_INFO(get_logger(), "Target yaw is within tolerance, skipping rotation");
       return true;
     }
 
-    const auto start_pose = lookup_robot_pose();
-    if (!start_pose.has_value()) {
+    const double rotate_time = std::abs(target_yaw) / rotate_speed_;
+    if (rotate_time > movement_timeout_) {
+      RCLCPP_WARN(get_logger(), "Rotate time %.3f exceeds movement timeout %.3f", rotate_time,
+                  movement_timeout_);
       publish_stop();
       return false;
     }
@@ -306,34 +257,21 @@ private:
     cmd.angular.z = target_yaw > 0.0 ? rotate_speed_ : -rotate_speed_;
     const auto start_time = now();
     rclcpp::Rate rate(20.0);
-    RCLCPP_INFO(get_logger(), "Rotating toward cart_frame: target_yaw=%.3f rad, angular_z=%.3f rad/s",
-                target_yaw, cmd.angular.z);
+    RCLCPP_INFO(get_logger(),
+                "Open-loop rotate correction: target_yaw=%.3f rad, angular_z=%.3f rad/s, "
+                "duration=%.3f s",
+                target_yaw, cmd.angular.z, rotate_time);
 
-    while (rclcpp::ok() && (now() - start_time).seconds() < movement_timeout_) {
-      const auto current_pose = lookup_robot_pose();
-      if (!current_pose.has_value()) {
-        publish_stop();
-        return false;
-      }
-
-      const double rotated_yaw = normalize_angle(current_pose->yaw - start_pose->yaw);
-      if (std::abs(rotated_yaw) >= std::abs(target_yaw) - yaw_tolerance_) {
-        publish_stop();
-        RCLCPP_INFO(get_logger(), "Rotation complete: target_yaw=%.3f rad, actual_yaw=%.3f rad",
-                    target_yaw, rotated_yaw);
-        return true;
-      }
-
+    while (rclcpp::ok() && (now() - start_time).seconds() < rotate_time) {
       cmd_vel_pub_->publish(cmd);
       rate.sleep();
     }
 
     publish_stop();
-    RCLCPP_WARN(get_logger(), "Rotation timed out before reaching target_yaw=%.3f rad", target_yaw);
-    return false;
+    return true;
   }
 
-  bool drive_forward_distance(double distance, const std::string & label)
+  bool drive_forward_open_loop(double distance, const std::string & label)
   {
     if (distance <= 0.0) {
       RCLCPP_WARN(get_logger(), "%s distance %.3f is not positive", label.c_str(), distance);
@@ -341,8 +279,10 @@ private:
       return false;
     }
 
-    const auto start_pose = lookup_robot_pose();
-    if (!start_pose.has_value()) {
+    const double drive_time = distance / forward_speed_;
+    if (drive_time > movement_timeout_) {
+      RCLCPP_WARN(get_logger(), "%s drive time %.3f exceeds movement timeout %.3f", label.c_str(),
+                  drive_time, movement_timeout_);
       publish_stop();
       return false;
     }
@@ -351,73 +291,79 @@ private:
     cmd.linear.x = forward_speed_;
     const auto start_time = now();
     rclcpp::Rate rate(20.0);
-    RCLCPP_INFO(get_logger(), "%s: target_distance=%.3f m, speed=%.3f m/s", label.c_str(), distance,
-                forward_speed_);
+    RCLCPP_INFO(get_logger(), "%s: distance=%.3f m, speed=%.3f m/s, duration=%.3f s",
+                label.c_str(), distance, forward_speed_, drive_time);
 
-    while (rclcpp::ok() && (now() - start_time).seconds() < movement_timeout_) {
-      const auto current_pose = lookup_robot_pose();
-      if (!current_pose.has_value()) {
-        publish_stop();
-        return false;
-      }
-
-      const double dx = current_pose->x - start_pose->x;
-      const double dy = current_pose->y - start_pose->y;
-      const double traveled = std::hypot(dx, dy);
-      if (traveled >= distance) {
-        publish_stop();
-        RCLCPP_INFO(get_logger(), "%s complete: target_distance=%.3f m, actual_distance=%.3f m",
-                    label.c_str(), distance, traveled);
-        return true;
-      }
-
+    while (rclcpp::ok() && (now() - start_time).seconds() < drive_time) {
       cmd_vel_pub_->publish(cmd);
       rate.sleep();
     }
 
     publish_stop();
-    RCLCPP_WARN(get_logger(), "%s timed out before reaching %.3f m", label.c_str(), distance);
-    return false;
+    return true;
   }
 
-  bool perform_final_approach(const CartFrame & cart_frame)
+  bool perform_final_approach(const CartFrame & initial_cart_frame)
   {
-    // First align the robot with cart_frame before driving forward.
-    const double target_yaw = std::atan2(cart_frame.y, cart_frame.x);
     RCLCPP_INFO(get_logger(),
-                "Starting final approach: target_yaw=%.3f rad, cart_frame=(%.3f, %.3f)", target_yaw,
-                cart_frame.x, cart_frame.y);
+                "Starting scan-closed-loop final approach from cart_frame=(%.3f, %.3f)",
+                initial_cart_frame.x, initial_cart_frame.y);
 
-    if (std::abs(target_yaw) > max_target_yaw_) {
-      RCLCPP_WARN(get_logger(), "Invalid target_yaw: target yaw  %.3f is larger than maximum %.3f",
-                  target_yaw, max_target_yaw_);
+    CartFrame cart_frame = initial_cart_frame;
+    const auto start_time = now();
+    int step_count = 0;
+    while (rclcpp::ok() && (now() - start_time).seconds() < movement_timeout_) {
+      publish_cart_frame(cart_frame);
+      const double target_yaw = std::atan2(cart_frame.y, cart_frame.x);
+      RCLCPP_INFO(get_logger(),
+                  "Final approach step %d: cart_frame=(%.3f, %.3f), target_yaw=%.3f",
+                  step_count, cart_frame.x, cart_frame.y, target_yaw);
+
+      if (std::abs(target_yaw) > max_target_yaw_) {
+        RCLCPP_WARN(get_logger(), "Invalid target_yaw: target yaw %.3f is larger than maximum %.3f",
+                    target_yaw, max_target_yaw_);
+        publish_stop();
+        return false;
+      }
+
+      if (!rotate_by_yaw_open_loop(target_yaw)) {
+        return false;
+      }
+
+      if (cart_frame.x <= target_x_before_push_) {
+        RCLCPP_INFO(get_logger(),
+                    "cart_frame x %.3f is within final approach target %.3f; starting final push",
+                    cart_frame.x, target_x_before_push_);
+        break;
+      }
+
+      const double step_distance =
+          std::min(forward_step_distance_, cart_frame.x - target_x_before_push_);
+      if (!drive_forward_open_loop(step_distance, "Scan-closed-loop forward step")) {
+        return false;
+      }
+
+      rclcpp::sleep_for(std::chrono::milliseconds(200));
+      auto updated_cart_frame = detect_cart_frame();
+      if (!updated_cart_frame.has_value()) {
+        RCLCPP_WARN(get_logger(),
+                    "Cannot refresh cart_frame after forward step; stopping final approach");
+        publish_stop();
+        return false;
+      }
+
+      cart_frame = updated_cart_frame.value();
+      ++step_count;
+    }
+
+    if ((now() - start_time).seconds() >= movement_timeout_) {
       publish_stop();
+      RCLCPP_WARN(get_logger(), "Final approach timed out before reaching target_x %.3f",
+                  target_x_before_push_);
       return false;
     }
 
-    if (!rotate_by_yaw(target_yaw)) {
-      return false;
-    }
-
-    // Stop short of cart_frame so the final push enters under the shelf deliberately.
-    const double drive_distance = cart_frame.x - conservative_offset_;
-
-    if (drive_distance <= 0.0) {
-      RCLCPP_WARN(
-          get_logger(),
-          "Drive distance %.3f is not positive; cart_frame x=%.3f, conservative_offset=%.3f",
-          drive_distance, cart_frame.x, conservative_offset_);
-      publish_stop();
-      return false;
-    }
-
-    if (!drive_forward_distance(drive_distance, "Driving toward cart_frame")) {
-      return false;
-    }
-
-    // Final short push moves the robot under the shelf before raising the elevator.
-    const double final_drive_distance = 0.30;
-    if (!drive_forward_distance(final_drive_distance, "Final shelf push")) {
+    if (!drive_forward_open_loop(final_drive_distance_, "Final shelf push")) {
       return false;
     }
 
@@ -440,6 +386,8 @@ private:
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr elevator_up_pub_;
   rclcpp::Service<attach_shelf::srv::GoToLoading>::SharedPtr approach_service_;
+  rclcpp::CallbackGroup::SharedPtr scan_callback_group_;
+  rclcpp::CallbackGroup::SharedPtr service_callback_group_;
   std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
 
   std::optional<sensor_msgs::msg::LaserScan> latest_scan_;
@@ -454,15 +402,18 @@ private:
   double movement_timeout_;
   double conservative_offset_;
   double max_target_yaw_;
-
-  tf2_ros::Buffer tf_buffer_;
-  std::unique_ptr<tf2_ros::TransformListener> tf_listener_;
+  double target_x_before_push_;
+  double forward_step_distance_;
+  double final_drive_distance_;
 };
 
 int main(int argc, char ** argv)
 {
   rclcpp::init(argc, argv);
-  rclcpp::spin(std::make_shared<ApproachServiceServer>());
+  auto node = std::make_shared<ApproachServiceServer>();
+  rclcpp::executors::MultiThreadedExecutor executor;
+  executor.add_node(node);
+  executor.spin();
   rclcpp::shutdown();
   return 0;
 }
