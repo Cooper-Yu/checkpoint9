@@ -38,10 +38,10 @@ public:
     tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
 
     approach_service_ = create_service<attach_shelf::srv::GoToLoading>(
-        "/approach_shelf", std::bind(&ApproachServiceServer::handle_approach_request, this,
-                                     std::placeholders::_1, std::placeholders::_2));
+        "/approach_service", std::bind(&ApproachServiceServer::handle_approach_request, this,
+                                       std::placeholders::_1, std::placeholders::_2));
 
-    RCLCPP_INFO(get_logger(), "approach_service_server ready on /approach_shelf");
+    RCLCPP_INFO(get_logger(), "approach_service_server ready on /approach_service");
   }
 
 private:
@@ -61,7 +61,7 @@ private:
       const std::shared_ptr<attach_shelf::srv::GoToLoading::Request> request,
       std::shared_ptr<attach_shelf::srv::GoToLoading::Response> response)
   {
-    RCLCPP_INFO(get_logger(), "Received /approach_shelf request: attach_to_shelf=%s",
+    RCLCPP_INFO(get_logger(), "Received /approach_service request: attach_to_shelf=%s",
                 request->attach_to_shelf ? "true" : "false");
 
     auto cart_frame = detect_cart_frame();

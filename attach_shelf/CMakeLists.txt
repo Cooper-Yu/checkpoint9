@@ -25,6 +25,13 @@ ament_target_dependencies(pre_approach
   sensor_msgs
 )
 
+add_executable(pre_approach_v2 src/pre_approach_v2.cpp)
+ament_target_dependencies(pre_approach_v2
+  rclcpp
+  geometry_msgs
+  sensor_msgs
+)
+
 add_executable(approach_service_server src/approach_service_server.cpp)
 ament_target_dependencies(approach_service_server
   rclcpp
@@ -38,10 +45,12 @@ rosidl_get_typesupport_target(cpp_typesupport_target
   ${PROJECT_NAME}
   "rosidl_typesupport_cpp"
 )
+target_link_libraries(pre_approach_v2 "${cpp_typesupport_target}")
 target_link_libraries(approach_service_server "${cpp_typesupport_target}")
 
 install(TARGETS
   pre_approach
+  pre_approach_v2
   approach_service_server
   DESTINATION lib/${PROJECT_NAME}
 )
