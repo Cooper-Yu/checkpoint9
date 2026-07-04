@@ -217,10 +217,6 @@ private:
 
       // ROTATING -> DONE after rotate_time_
       case State::ROTATING: {
-        if (!check_runtime_safety()) {
-          return;
-        }
-
         // Continue publishing angular velocity; a single Twist message is not enough.
         double elapsed = (this->now() - rotation_start_time_).seconds();
         if (elapsed < rotate_time_) {
