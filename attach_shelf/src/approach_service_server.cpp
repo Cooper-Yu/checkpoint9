@@ -31,6 +31,7 @@ public:
         conservative_offset_(0.15),
         max_target_yaw_(0.8),
         max_step_yaw_(0.2),
+        max_midpoint_y_(0.35),
         target_x_before_push_(0.50),
         forward_step_distance_(0.10),
         final_drive_distance_(0.30)
@@ -194,20 +195,24 @@ private:
     double best_score = std::numeric_limits<double>::max();
     double largest_rejected_x_difference = 0.0;
     double largest_rejected_separation = 0.0;
+    double largest_rejected_midpoint_y = 0.0;
     for (size_t i = 0; i < candidates.size(); ++i) {
       for (size_t j = i + 1; j < candidates.size(); ++j) {
         const auto & a = candidates[i];
         const auto & b = candidates[j];
         const double leg_separation = std::abs(a.y - b.y);
         const double x_difference = std::abs(a.x - b.x);
+        const double midpoint_y = (a.y + b.y) / 2.0;
         largest_rejected_separation = std::max(largest_rejected_separation, leg_separation);
         largest_rejected_x_difference = std::max(largest_rejected_x_difference, x_difference);
+        largest_rejected_midpoint_y =
+            std::max(largest_rejected_midpoint_y, std::abs(midpoint_y));
 
-        if (leg_separation < min_leg_separation_ || x_difference > max_x_difference_) {
+        if (leg_separation < min_leg_separation_ || x_difference > max_x_difference_ ||
+            std::abs(midpoint_y) > max_midpoint_y_) {
           continue;
         }
 
-        const double midpoint_y = (a.y + b.y) / 2.0;
         const double score = std::abs(midpoint_y) + x_difference;
         if (score < best_score) {
           best_score = score;
@@ -220,9 +225,10 @@ private:
       RCLCPP_WARN(get_logger(),
                   "Cannot detect cart_frame: %zu front candidates but no valid leg pair "
                   "(max_seen_separation=%.3f, max_seen_x_difference=%.3f, min_separation=%.3f, "
-                  "max_x_difference=%.3f)",
+                  "max_x_difference=%.3f, max_seen_midpoint_y=%.3f, max_midpoint_y=%.3f)",
                   candidates.size(), largest_rejected_separation, largest_rejected_x_difference,
-                  min_leg_separation_, max_x_difference_);
+                  min_leg_separation_, max_x_difference_, largest_rejected_midpoint_y,
+                  max_midpoint_y_);
       return std::nullopt;
     }
 
@@ -436,6 +442,7 @@ private:
   double conservative_offset_;
   double max_target_yaw_;
   double max_step_yaw_;
+  double max_midpoint_y_;
   double target_x_before_push_;
   double forward_step_distance_;
   double final_drive_distance_;
