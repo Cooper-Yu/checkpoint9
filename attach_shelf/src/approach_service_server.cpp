@@ -167,12 +167,45 @@ private:
 
     // TODO: run geometry sanity checks and return the midpoint.
     if (x_1 <= 0.0 || x_2 <= 0.0) {
-      RCLCPP_WARN(get_logger(), "cart_frame detection is not implemented yet");
+      RCLCPP_WARN(
+        get_logger(),
+        "Invalid shelf leg geometry: leg points must be in front of the robot, got x1=%.3f, x2=%.3f",
+        x_1,
+        x_2);
+      return std::nullopt;
+    }
+
+    double leg_separation = std::abs(y_1 - y_2);
+    if (leg_separation < min_leg_separation_) {
+      RCLCPP_WARN(
+        get_logger(),
+        "Invalid shelf leg geometry: lateral separation %.3f is smaller than minimum %.3f",
+        leg_separation,
+        min_leg_separation_);
+      return std::nullopt;
+    }
+
+    double x_difference = std::abs(x_1 - x_2);
+    if (x_difference > max_x_difference_) {
+      RCLCPP_WARN(
+        get_logger(),
+        "Invalid shelf leg geometry: x difference %.3f is larger than maximum %.3f",
+        x_difference,
+        max_x_difference_);
       return std::nullopt;
     }
 
     const double x = (x_1 + x_2) / 2;
     const double y = (y_1 + y_2) / 2;
+
+    if (x <= 0.0) {
+      RCLCPP_WARN(
+        get_logger(),
+        "Invalid cart_frame: midpoint x %.3f must be positive",
+        x);
+      return std::nullopt;
+    }
+
     return CartFrame{x, y, scan.header.frame_id};
   }
 
