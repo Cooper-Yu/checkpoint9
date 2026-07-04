@@ -95,7 +95,6 @@ private:
 
   static constexpr double kPi = 3.14159265358979323846;
   static constexpr double kScanPauseTimeout = 1.0;
-  static constexpr double kScanSafeStopTimeout = 5.0;
 
   bool get_front_distance(const sensor_msgs::msg::LaserScan & scan, double window_degrees,
                           double & front_distance)
@@ -257,15 +256,10 @@ private:
     }
 
     const double scan_age = (now() - last_valid_scan_time_).seconds();
-    if (scan_age > kScanSafeStopTimeout) {
-      enter_safe_stop("latest valid scan exceeded the safe stop timeout");
-      return false;
-    }
-
     if (scan_age > kScanPauseTimeout) {
       RCLCPP_WARN_THROTTLE(
           get_logger(), *get_clock(), 1000,
-          "Waiting for a fresh front scan before continuing; latest is %.2f seconds old", scan_age);
+          "Stopping until a fresh front scan arrives; latest is %.2f seconds old", scan_age);
       publish_stop();
       return false;
     }
