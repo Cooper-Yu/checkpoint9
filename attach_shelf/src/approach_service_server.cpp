@@ -22,7 +22,7 @@ public:
       : Node("approach_service_server"),
         intensity_threshold_(8000.0),
         min_cluster_size_(2),
-        max_x_difference_(0.35),
+        max_x_difference_(0.75),
         min_leg_separation_(0.25),
         rotate_speed_(0.3),
         forward_speed_(0.2),
@@ -31,7 +31,7 @@ public:
         conservative_offset_(0.15),
         max_target_yaw_(0.8),
         target_x_before_push_(0.35),
-        forward_step_distance_(0.15),
+        forward_step_distance_(0.10),
         final_drive_distance_(0.30)
   {
     scan_callback_group_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
