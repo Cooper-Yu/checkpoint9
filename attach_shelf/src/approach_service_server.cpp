@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <cmath>
 #include <memory>
+#include <limits>
 #include <optional>
 #include <string>
 #include <vector>
@@ -60,6 +61,13 @@ private:
     double x;
     double y;
     std::string frame_id;
+  };
+
+  struct LegCandidate
+  {
+    double x;
+    double y;
+    size_t size;
   };
 
   void scan_callback(const sensor_msgs::msg::LaserScan::SharedPtr msg)
@@ -154,60 +162,75 @@ private:
       clusters.push_back(current_cluster);
     }
 
-    if (clusters.size() < 2) {
+    std::vector<LegCandidate> candidates;
+    for (const auto & cluster : clusters) {
+      const size_t index = cluster[cluster.size() / 2];
+      const double angle = scan.angle_min + index * scan.angle_increment;
+      const double range = scan.ranges[index];
+      const double x = range * std::cos(angle);
+      const double y = range * std::sin(angle);
+
+      if (x <= 0.0) {
+        RCLCPP_INFO(get_logger(),
+                    "Ignoring reflective cluster behind robot: x=%.3f, y=%.3f, rays=%zu", x, y,
+                    cluster.size());
+        continue;
+      }
+
+      candidates.push_back(LegCandidate{x, y, cluster.size()});
+    }
+
+    if (candidates.size() < 2) {
       RCLCPP_WARN(get_logger(),
-                  "Cannot detect cart_frame: found %zu reflective clusters, need at least 2 "
-                  "(high_intensity_rays=%zu, max_intensity=%.1f, threshold=%.1f)",
-                  clusters.size(), high_intensity_ray_count, max_intensity, intensity_threshold_);
+                  "Cannot detect cart_frame: found %zu front reflective candidates from %zu clusters, "
+                  "need at least 2 (high_intensity_rays=%zu, max_intensity=%.1f, threshold=%.1f)",
+                  candidates.size(), clusters.size(), high_intensity_ray_count, max_intensity,
+                  intensity_threshold_);
       return std::nullopt;
     }
 
-    std::stable_sort(clusters.begin(), clusters.end(),
-                     [](const auto & a, const auto & b) { return a.size() > b.size(); });
+    std::optional<std::pair<LegCandidate, LegCandidate>> best_pair;
+    double best_score = std::numeric_limits<double>::max();
+    double largest_rejected_x_difference = 0.0;
+    double largest_rejected_separation = 0.0;
+    for (size_t i = 0; i < candidates.size(); ++i) {
+      for (size_t j = i + 1; j < candidates.size(); ++j) {
+        const auto & a = candidates[i];
+        const auto & b = candidates[j];
+        const double leg_separation = std::abs(a.y - b.y);
+        const double x_difference = std::abs(a.x - b.x);
+        largest_rejected_separation = std::max(largest_rejected_separation, leg_separation);
+        largest_rejected_x_difference = std::max(largest_rejected_x_difference, x_difference);
 
-    const auto & cluster_1 = clusters[0];
-    const auto & cluster_2 = clusters[1];
+        if (leg_separation < min_leg_separation_ || x_difference > max_x_difference_) {
+          continue;
+        }
 
-    // Use the middle ray of each cluster as a stable representative leg point.
-    const size_t index_1 = cluster_1[cluster_1.size() / 2];
-    const size_t index_2 = cluster_2[cluster_2.size() / 2];
-    double angle_1 = scan.angle_min + index_1 * scan.angle_increment;
-    double range_1 = scan.ranges[index_1];
-    const double x_1 = range_1 * std::cos(angle_1);
-    const double y_1 = range_1 * std::sin(angle_1);
-    double angle_2 = scan.angle_min + index_2 * scan.angle_increment;
-    double range_2 = scan.ranges[index_2];
-    const double x_2 = range_2 * std::cos(angle_2);
-    const double y_2 = range_2 * std::sin(angle_2);
+        const double midpoint_y = (a.y + b.y) / 2.0;
+        const double score = std::abs(midpoint_y) + x_difference;
+        if (score < best_score) {
+          best_score = score;
+          best_pair = std::make_pair(a, b);
+        }
+      }
+    }
 
-    // Reject detections that do not look like two shelf legs in front of the robot.
-    if (x_1 <= 0.0 || x_2 <= 0.0) {
+    if (!best_pair.has_value()) {
       RCLCPP_WARN(get_logger(),
-                  "Invalid shelf leg geometry: leg points must be in front of the robot, got "
-                  "x1=%.3f, x2=%.3f",
-                  x_1, x_2);
+                  "Cannot detect cart_frame: %zu front candidates but no valid leg pair "
+                  "(max_seen_separation=%.3f, max_seen_x_difference=%.3f, min_separation=%.3f, "
+                  "max_x_difference=%.3f)",
+                  candidates.size(), largest_rejected_separation, largest_rejected_x_difference,
+                  min_leg_separation_, max_x_difference_);
       return std::nullopt;
     }
 
-    double leg_separation = std::abs(y_1 - y_2);
-    if (leg_separation < min_leg_separation_) {
-      RCLCPP_WARN(
-          get_logger(),
-          "Invalid shelf leg geometry: lateral separation %.3f is smaller than minimum %.3f",
-          leg_separation, min_leg_separation_);
-      return std::nullopt;
-    }
-
-    double x_difference = std::abs(x_1 - x_2);
-    if (x_difference > max_x_difference_) {
-      RCLCPP_WARN(get_logger(),
-                  "Invalid shelf leg geometry: x difference %.3f is larger than maximum %.3f",
-                  x_difference, max_x_difference_);
-      return std::nullopt;
-    }
-
-    const double x = (x_1 + x_2) / 2;
-    const double y = (y_1 + y_2) / 2;
+    const auto leg_1 = best_pair->first;
+    const auto leg_2 = best_pair->second;
+    const double x = (leg_1.x + leg_2.x) / 2.0;
+    const double y = (leg_1.y + leg_2.y) / 2.0;
+    const double leg_separation = std::abs(leg_1.y - leg_2.y);
+    const double x_difference = std::abs(leg_1.x - leg_2.x);
 
     if (x <= 0.0) {
       RCLCPP_WARN(get_logger(), "Invalid cart_frame: midpoint x %.3f must be positive", x);
@@ -216,8 +239,9 @@ private:
 
     RCLCPP_INFO(get_logger(),
                 "Detected cart_frame: x=%.3f, y=%.3f, leg1=(%.3f, %.3f), leg2=(%.3f, %.3f), "
-                "separation=%.3f",
-                x, y, x_1, y_1, x_2, y_2, leg_separation);
+                "separation=%.3f, x_difference=%.3f, front_candidates=%zu",
+                x, y, leg_1.x, leg_1.y, leg_2.x, leg_2.y, leg_separation, x_difference,
+                candidates.size());
     return CartFrame{x, y, scan.header.frame_id};
   }
 
