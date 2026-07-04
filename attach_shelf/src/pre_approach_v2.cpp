@@ -100,16 +100,11 @@ private:
   };
 
   static constexpr double kPi = 3.14159265358979323846;
-  static constexpr double kFrontWindowDegrees = 20.0;
-  static constexpr double kScanPauseTimeout = 1.0;
-  static constexpr double kScanSafeStopTimeout = 10.0;
-  static constexpr int kInvalidScanLimit = 30;
 
   bool get_front_distance(const sensor_msgs::msg::LaserScan & scan, double window_degrees,
                           double & front_distance)
   {
     std::vector<double> valid_ranges;
-    bool saw_clear_ray = false;
     const double half_window = window_degrees / 2.0 * kPi / 180.0;
 
     for (double angle = -half_window; angle < half_window; angle += scan.angle_increment) {
@@ -121,11 +116,6 @@ private:
       }
 
       const double distance = scan.ranges[index];
-      if (std::isinf(distance) && distance > 0.0) {
-        saw_clear_ray = true;
-        continue;
-      }
-
       if (!std::isfinite(distance) || distance < scan.range_min || distance > scan.range_max) {
         continue;
       }
@@ -134,11 +124,6 @@ private:
     }
 
     if (valid_ranges.empty()) {
-      if (saw_clear_ray) {
-        front_distance = scan.range_max;
-        return true;
-      }
-
       return false;
     }
 
@@ -149,7 +134,7 @@ private:
   void scan_callback(const sensor_msgs::msg::LaserScan::SharedPtr msg)
   {
     double distance = 0.0;
-    if (get_front_distance(*msg, kFrontWindowDegrees, distance)) {
+    if (get_front_distance(*msg, 10.0, distance)) {
       front_distance_ = distance;
       last_valid_scan_time_ = now();
       invalid_scan_count_ = 0;
@@ -185,20 +170,20 @@ private:
           return;
         }
 
+        publish_forward();
         if (front_distance_.value() <= obstacle_) {
           publish_stop();
           stop_start_time_ = now();
           state_ = State::STOP_BEFORE_ROTATE;
-          RCLCPP_INFO(get_logger(), "Reached obstacle distance %.2f m; preparing to rotate",
-                      front_distance_.value());
-          return;
         }
-
-        publish_forward();
         return;
       }
 
       case State::STOP_BEFORE_ROTATE: {
+        if (!check_runtime_safety()) {
+          return;
+        }
+
         publish_stop();
         const double elapsed_stop = (now() - stop_start_time_).seconds();
         if (elapsed_stop < 0.2) {
@@ -212,13 +197,14 @@ private:
 
         rotation_start_time_ = now();
         state_ = State::ROTATING;
-        RCLCPP_INFO(get_logger(), "Starting open-loop rotation for %.2f seconds", rotate_time_);
         return;
       }
 
       case State::ROTATING: {
-        // During open-loop rotation, the front scan window may point away from the wall.
-        // Do not require a fresh front-distance reading here; bound the motion by time.
+        if (!check_runtime_safety()) {
+          return;
+        }
+
         const double elapsed = (now() - rotation_start_time_).seconds();
         if (elapsed < rotate_time_) {
           publish_rotate();
@@ -249,22 +235,12 @@ private:
       return false;
     }
 
-    const double scan_age = (now() - last_valid_scan_time_).seconds();
-    if (scan_age > kScanSafeStopTimeout) {
-      enter_safe_stop("latest valid scan exceeded the safe stop timeout");
+    if ((now() - last_valid_scan_time_).seconds() > 1.0) {
+      enter_safe_stop("latest valid scan is older than 1.0 seconds");
       return false;
     }
 
-    if (scan_age > kScanPauseTimeout) {
-      RCLCPP_WARN_THROTTLE(
-          get_logger(), *get_clock(), 1000,
-          "Waiting for a fresh front scan before continuing forward; latest is %.2f seconds old",
-          scan_age);
-      publish_stop();
-      return false;
-    }
-
-    if (invalid_scan_count_ >= kInvalidScanLimit) {
+    if (invalid_scan_count_ >= 10) {
       enter_safe_stop("too many consecutive invalid scan windows");
       return false;
     }
