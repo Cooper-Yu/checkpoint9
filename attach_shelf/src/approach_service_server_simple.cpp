@@ -32,8 +32,10 @@ public:
         max_x_difference_(0.75),
         min_leg_separation_(0.25),
         rotate_speed_(0.3),
+        min_rotate_speed_(0.05),
+        rotate_speed_gain_(1.0),
         forward_speed_(0.2),
-        yaw_tolerance_(0.05),
+        yaw_tolerance_(0.005),
         center_lateral_tolerance_(0.05),
         center_distance_tolerance_(0.20),
         center_lock_distance_(0.35),
@@ -53,7 +55,10 @@ public:
         target_base_frame_("robot_base_link")
   {
     declare_parameter<double>("rotate_speed", rotate_speed_);
+    declare_parameter<double>("min_rotate_speed", min_rotate_speed_);
+    declare_parameter<double>("rotate_speed_gain", rotate_speed_gain_);
     declare_parameter<double>("forward_speed", forward_speed_);
+    declare_parameter<double>("yaw_tolerance", yaw_tolerance_);
     declare_parameter<double>("conservative_offset", conservative_offset_);
     declare_parameter<double>("final_drive_distance", final_drive_distance_);
     declare_parameter<double>("center_lateral_tolerance", center_lateral_tolerance_);
@@ -72,7 +77,10 @@ public:
     declare_parameter<std::string>("target_base_frame", target_base_frame_);
 
     rotate_speed_ = get_parameter("rotate_speed").as_double();
+    min_rotate_speed_ = get_parameter("min_rotate_speed").as_double();
+    rotate_speed_gain_ = get_parameter("rotate_speed_gain").as_double();
     forward_speed_ = get_parameter("forward_speed").as_double();
+    yaw_tolerance_ = get_parameter("yaw_tolerance").as_double();
     conservative_offset_ = get_parameter("conservative_offset").as_double();
     final_drive_distance_ = get_parameter("final_drive_distance").as_double();
     center_lateral_tolerance_ = get_parameter("center_lateral_tolerance").as_double();
@@ -831,7 +839,8 @@ private:
 
   bool rotate_by_yaw_open_loop(double target_yaw, const std::string & label)
   {
-    if (std::abs(target_yaw) < yaw_tolerance_) {
+    const double abs_target_yaw = std::abs(target_yaw);
+    if (abs_target_yaw < yaw_tolerance_) {
       RCLCPP_INFO(get_logger(), "%s skipped: target_yaw %.3f is within tolerance", label.c_str(),
                   target_yaw);
       publish_stop();
@@ -844,7 +853,21 @@ private:
       return false;
     }
 
-    const double rotate_time = std::abs(target_yaw) / rotate_speed_;
+    if (min_rotate_speed_ <= 0.0) {
+      RCLCPP_WARN(get_logger(), "%s failed: min_rotate_speed %.3f is not positive", label.c_str(),
+                  min_rotate_speed_);
+      return false;
+    }
+
+    if (rotate_speed_gain_ <= 0.0) {
+      RCLCPP_WARN(get_logger(), "%s failed: rotate_speed_gain %.3f is not positive", label.c_str(),
+                  rotate_speed_gain_);
+      return false;
+    }
+
+    const double adaptive_rotate_speed =
+        std::clamp(abs_target_yaw * rotate_speed_gain_, min_rotate_speed_, rotate_speed_);
+    const double rotate_time = abs_target_yaw / adaptive_rotate_speed;
     if (rotate_time > movement_timeout_) {
       RCLCPP_WARN(get_logger(), "%s failed: rotate_time %.3f exceeds movement_timeout %.3f",
                   label.c_str(), rotate_time, movement_timeout_);
@@ -852,12 +875,15 @@ private:
     }
 
     geometry_msgs::msg::Twist cmd;
-    cmd.angular.z = target_yaw > 0.0 ? rotate_speed_ : -rotate_speed_;
+    cmd.angular.z = target_yaw > 0.0 ? adaptive_rotate_speed : -adaptive_rotate_speed;
     const auto start_time = now();
     rclcpp::Rate rate(20.0);
 
-    RCLCPP_INFO(get_logger(), "%s: target_yaw=%.3f rad, angular_z=%.3f rad/s, duration=%.3f s",
-                label.c_str(), target_yaw, cmd.angular.z, rotate_time);
+    RCLCPP_INFO(get_logger(),
+                "%s: target_yaw=%.4f rad, angular_z=%.4f rad/s, duration=%.3f s "
+                "(adaptive speed, min=%.3f, max=%.3f, gain=%.3f)",
+                label.c_str(), target_yaw, cmd.angular.z, rotate_time, min_rotate_speed_,
+                rotate_speed_, rotate_speed_gain_);
 
     while (rclcpp::ok() && (now() - start_time).seconds() < rotate_time) {
       cmd_vel_pub_->publish(cmd);
@@ -945,6 +971,8 @@ private:
   double max_x_difference_;
   double min_leg_separation_;
   double rotate_speed_;
+  double min_rotate_speed_;
+  double rotate_speed_gain_;
   double forward_speed_;
   double yaw_tolerance_;
   double center_lateral_tolerance_;

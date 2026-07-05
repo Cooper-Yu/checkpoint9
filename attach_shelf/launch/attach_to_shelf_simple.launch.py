@@ -21,6 +21,9 @@ def generate_launch_description():
     rotation_base_frame = LaunchConfiguration("rotation_base_frame")
     service_forward_speed = LaunchConfiguration("service_forward_speed")
     service_rotate_speed = LaunchConfiguration("service_rotate_speed")
+    service_min_rotate_speed = LaunchConfiguration("service_min_rotate_speed")
+    service_rotate_speed_gain = LaunchConfiguration("service_rotate_speed_gain")
+    service_yaw_tolerance = LaunchConfiguration("service_yaw_tolerance")
     conservative_offset = LaunchConfiguration("conservative_offset")
     final_drive_distance = LaunchConfiguration("final_drive_distance")
     enable_final_push = LaunchConfiguration("enable_final_push")
@@ -100,6 +103,9 @@ def generate_launch_description():
             DeclareLaunchArgument("rotation_base_frame", default_value="robot_base_footprint"),
             DeclareLaunchArgument("service_forward_speed", default_value="0.2"),
             DeclareLaunchArgument("service_rotate_speed", default_value="0.3"),
+            DeclareLaunchArgument("service_min_rotate_speed", default_value="0.05"),
+            DeclareLaunchArgument("service_rotate_speed_gain", default_value="1.0"),
+            DeclareLaunchArgument("service_yaw_tolerance", default_value="0.005"),
             DeclareLaunchArgument("conservative_offset", default_value="0.0"),
             DeclareLaunchArgument("final_drive_distance", default_value="0.30"),
             DeclareLaunchArgument("enable_final_push", default_value="true"),
@@ -134,6 +140,9 @@ def generate_launch_description():
                     {
                         "forward_speed": ParameterValue(service_forward_speed, value_type=float),
                         "rotate_speed": ParameterValue(service_rotate_speed, value_type=float),
+                        "min_rotate_speed": ParameterValue(service_min_rotate_speed, value_type=float),
+                        "rotate_speed_gain": ParameterValue(service_rotate_speed_gain, value_type=float),
+                        "yaw_tolerance": ParameterValue(service_yaw_tolerance, value_type=float),
                         "conservative_offset": ParameterValue(conservative_offset, value_type=float),
                         "final_drive_distance": ParameterValue(final_drive_distance, value_type=float),
                         "enable_final_push": ParameterValue(enable_final_push, value_type=bool),
