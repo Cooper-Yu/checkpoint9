@@ -74,7 +74,7 @@ def generate_launch_description():
             DeclareLaunchArgument("rotation_scale", default_value="0.5"),
             DeclareLaunchArgument("service_forward_speed", default_value="0.2"),
             DeclareLaunchArgument("service_rotate_speed", default_value="0.3"),
-            DeclareLaunchArgument("conservative_offset", default_value="0.15"),
+            DeclareLaunchArgument("conservative_offset", default_value="0.0"),
             DeclareLaunchArgument("final_drive_distance", default_value="0.30"),
             DeclareLaunchArgument("use_rviz", default_value="true"),
             Node(

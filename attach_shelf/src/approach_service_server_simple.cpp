@@ -32,7 +32,7 @@ public:
         forward_speed_(0.2),
         yaw_tolerance_(0.05),
         movement_timeout_(12.0),
-        conservative_offset_(0.15),
+        conservative_offset_(0.0),
         final_drive_distance_(0.30)
   {
     declare_parameter<double>("rotate_speed", rotate_speed_);
