@@ -42,7 +42,9 @@ public:
         center_lock_min_steps_(2),
         center_drive_scale_(1.5),
         center_extra_forward_distance_(0.0),
-        yaw_correction_steps_(2),
+        yaw_correction_steps_(3),
+        min_yaw_correction_distance_(0.55),
+        restore_yaw_after_correction_(false),
         forward_step_distance_(0.20),
         cart_frame_retry_count_(6),
         movement_timeout_(45.0),
@@ -68,6 +70,8 @@ public:
     declare_parameter<double>("center_drive_scale", center_drive_scale_);
     declare_parameter<double>("center_extra_forward_distance", center_extra_forward_distance_);
     declare_parameter<int>("yaw_correction_steps", yaw_correction_steps_);
+    declare_parameter<double>("min_yaw_correction_distance", min_yaw_correction_distance_);
+    declare_parameter<bool>("restore_yaw_after_correction", restore_yaw_after_correction_);
     declare_parameter<double>("forward_step_distance", forward_step_distance_);
     declare_parameter<double>("movement_timeout", movement_timeout_);
     declare_parameter<bool>("enable_final_push", enable_final_push_);
@@ -90,6 +94,8 @@ public:
     center_drive_scale_ = get_parameter("center_drive_scale").as_double();
     center_extra_forward_distance_ = get_parameter("center_extra_forward_distance").as_double();
     yaw_correction_steps_ = get_parameter("yaw_correction_steps").as_int();
+    min_yaw_correction_distance_ = get_parameter("min_yaw_correction_distance").as_double();
+    restore_yaw_after_correction_ = get_parameter("restore_yaw_after_correction").as_bool();
     forward_step_distance_ = get_parameter("forward_step_distance").as_double();
     movement_timeout_ = get_parameter("movement_timeout").as_double();
     enable_final_push_ = get_parameter("enable_final_push").as_bool();
@@ -468,7 +474,8 @@ private:
       }
 
       publish_cart_frame(averaged_cart_frame.value());
-      const bool yaw_correction_enabled = step < yaw_correction_steps_;
+      const bool yaw_correction_enabled =
+          step < yaw_correction_steps_ && averaged_cart_frame->x > min_yaw_correction_distance_;
       const double detected_target_yaw = std::atan2(averaged_cart_frame->y, averaged_cart_frame->x);
       const double target_yaw = yaw_correction_enabled ? detected_target_yaw : 0.0;
       const double distance_to_center = std::hypot(averaged_cart_frame->x, averaged_cart_frame->y);
@@ -476,10 +483,12 @@ private:
       RCLCPP_INFO(get_logger(),
                   "Stepwise center step %d: cart_frame=(%.3f, %.3f), distance=%.3f m, "
                   "lateral_error=%.3f m, detected_target_yaw=%.3f rad, target_yaw=%.3f rad, "
-                  "yaw_correction_enabled=%s",
+                  "yaw_correction_enabled=%s, min_yaw_correction_distance=%.3f m, "
+                  "restore_yaw_after_correction=%s",
                   step, averaged_cart_frame->x, averaged_cart_frame->y, distance_to_center,
                   lateral_error, detected_target_yaw, target_yaw,
-                  yaw_correction_enabled ? "true" : "false");
+                  yaw_correction_enabled ? "true" : "false", min_yaw_correction_distance_,
+                  restore_yaw_after_correction_ ? "true" : "false");
 
       if (averaged_cart_frame->x <= center_distance_tolerance_ &&
           lateral_error <= center_lateral_tolerance_) {
@@ -521,8 +530,14 @@ private:
         return false;
       }
 
-      if (!rotate_by_yaw_open_loop(-target_yaw, "Stepwise yaw recovery")) {
-        return false;
+      if (restore_yaw_after_correction_) {
+        if (!rotate_by_yaw_open_loop(-target_yaw, "Stepwise yaw recovery")) {
+          return false;
+        }
+      } else if (yaw_correction_enabled) {
+        RCLCPP_INFO(
+            get_logger(),
+            "Stepwise yaw recovery skipped: keeping corrected heading for next center sample");
       }
 
       log_cart_frame_diagnostic("after stepwise center drive");
@@ -991,6 +1006,8 @@ private:
   double center_drive_scale_;
   double center_extra_forward_distance_;
   int yaw_correction_steps_;
+  double min_yaw_correction_distance_;
+  bool restore_yaw_after_correction_;
   double forward_step_distance_;
   int cart_frame_retry_count_;
   double movement_timeout_;

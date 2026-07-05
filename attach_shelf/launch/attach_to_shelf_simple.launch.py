@@ -34,6 +34,8 @@ def generate_launch_description():
     center_drive_scale = LaunchConfiguration("center_drive_scale")
     center_extra_forward_distance = LaunchConfiguration("center_extra_forward_distance")
     yaw_correction_steps = LaunchConfiguration("yaw_correction_steps")
+    min_yaw_correction_distance = LaunchConfiguration("min_yaw_correction_distance")
+    restore_yaw_after_correction = LaunchConfiguration("restore_yaw_after_correction")
     forward_step_distance = LaunchConfiguration("forward_step_distance")
     movement_timeout = LaunchConfiguration("movement_timeout")
     service_straight_test = LaunchConfiguration("service_straight_test")
@@ -115,7 +117,9 @@ def generate_launch_description():
             DeclareLaunchArgument("center_lock_min_steps", default_value="2"),
             DeclareLaunchArgument("center_drive_scale", default_value="1.5"),
             DeclareLaunchArgument("center_extra_forward_distance", default_value="0.0"),
-            DeclareLaunchArgument("yaw_correction_steps", default_value="2"),
+            DeclareLaunchArgument("yaw_correction_steps", default_value="3"),
+            DeclareLaunchArgument("min_yaw_correction_distance", default_value="0.55"),
+            DeclareLaunchArgument("restore_yaw_after_correction", default_value="false"),
             DeclareLaunchArgument("forward_step_distance", default_value="0.20"),
             DeclareLaunchArgument("movement_timeout", default_value="45.0"),
             DeclareLaunchArgument("service_straight_test", default_value="false"),
@@ -157,6 +161,12 @@ def generate_launch_description():
                             center_extra_forward_distance, value_type=float
                         ),
                         "yaw_correction_steps": ParameterValue(yaw_correction_steps, value_type=int),
+                        "min_yaw_correction_distance": ParameterValue(
+                            min_yaw_correction_distance, value_type=float
+                        ),
+                        "restore_yaw_after_correction": ParameterValue(
+                            restore_yaw_after_correction, value_type=bool
+                        ),
                         "forward_step_distance": ParameterValue(forward_step_distance, value_type=float),
                         "movement_timeout": ParameterValue(movement_timeout, value_type=float),
                         "service_straight_test": ParameterValue(service_straight_test, value_type=bool),
