@@ -129,7 +129,7 @@ def generate_launch_description():
             DeclareLaunchArgument("forward_step_distance", default_value="0.20"),
             DeclareLaunchArgument("movement_timeout", default_value="45.0"),
             DeclareLaunchArgument("service_straight_test", default_value="false"),
-            DeclareLaunchArgument("straight_sample_count", default_value="5"),
+            DeclareLaunchArgument("straight_sample_count", default_value="7"),
             DeclareLaunchArgument("straight_sample_max_spread", default_value="0.25"),
             DeclareLaunchArgument("target_base_frame", default_value="robot_base_link"),
             DeclareLaunchArgument("use_rviz", default_value="true"),

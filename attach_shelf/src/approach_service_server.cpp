@@ -54,7 +54,7 @@ public:
         enable_final_push_(true),
         verify_center_before_final_push_(false),
         service_straight_test_(false),
-        straight_sample_count_(5),
+        straight_sample_count_(7),
         straight_sample_max_spread_(0.25),
         target_base_frame_("robot_base_link")
   {
@@ -747,46 +747,96 @@ private:
   std::optional<CartFrame> sample_average_cart_frame(const CartFrame & first_cart_frame,
                                                      bool stop_before_sampling = true)
   {
-    std::vector<CartFrame> samples;
-    samples.push_back(first_cart_frame);
-    if (stop_before_sampling) {
-      publish_stop();
-    }
+    auto first_sample = first_cart_frame;
 
-    RCLCPP_INFO(get_logger(),
-                "Straight service sampling started: target_samples=%d, max_spread=%.3f m, "
-                "stop_before_sampling=%s",
-                straight_sample_count_, straight_sample_max_spread_,
-                stop_before_sampling ? "true" : "false");
-
-    for (int i = 1; i < straight_sample_count_; ++i) {
-      rclcpp::sleep_for(200ms);
-      auto cart_frame = wait_for_cart_frame(0.5);
-      if (!cart_frame.has_value()) {
-        RCLCPP_WARN(get_logger(), "Straight service sample %d/%d failed: no cart_frame", i + 1,
-                    straight_sample_count_);
-        return std::nullopt;
+    for (int attempt = 1; attempt <= kStraightSampleRetryCount; ++attempt) {
+      std::vector<CartFrame> samples;
+      samples.push_back(first_sample);
+      if (stop_before_sampling && attempt == 1) {
+        publish_stop();
       }
 
-      samples.push_back(cart_frame.value());
       RCLCPP_INFO(get_logger(),
-                  "Straight service sample %d/%d: cart_frame[%s]=(%.3f, %.3f), "
-                  "laser[%s]=(%.3f, %.3f)",
-                  i + 1, straight_sample_count_, cart_frame->frame_id.c_str(), cart_frame->x,
-                  cart_frame->y, cart_frame->laser_frame_id.c_str(), cart_frame->laser_x,
-                  cart_frame->laser_y);
+                  "Straight service sampling started: attempt=%d/%d, target_samples=%d, "
+                  "max_spread=%.3f m, stop_before_sampling=%s",
+                  attempt, kStraightSampleRetryCount, straight_sample_count_,
+                  straight_sample_max_spread_, stop_before_sampling ? "true" : "false");
+
+      for (int i = 1; i < straight_sample_count_; ++i) {
+        rclcpp::sleep_for(200ms);
+        auto cart_frame = wait_for_cart_frame(0.5);
+        if (!cart_frame.has_value()) {
+          RCLCPP_WARN(get_logger(), "Straight service sample %d/%d failed: no cart_frame", i + 1,
+                      straight_sample_count_);
+          return std::nullopt;
+        }
+
+        samples.push_back(cart_frame.value());
+        RCLCPP_INFO(get_logger(),
+                    "Straight service sample %d/%d: cart_frame[%s]=(%.3f, %.3f), "
+                    "laser[%s]=(%.3f, %.3f)",
+                    i + 1, straight_sample_count_, cart_frame->frame_id.c_str(), cart_frame->x,
+                    cart_frame->y, cart_frame->laser_frame_id.c_str(), cart_frame->laser_x,
+                    cart_frame->laser_y);
+      }
+
+      auto robust_average = robust_average_cart_frame(samples, first_sample);
+      if (robust_average.has_value()) {
+        return robust_average;
+      }
+
+      RCLCPP_WARN(get_logger(),
+                  "Straight service samples were not stable on attempt %d/%d; re-sampling", attempt,
+                  kStraightSampleRetryCount);
+
+      auto next_first_sample = wait_for_cart_frame(1.0);
+      if (!next_first_sample.has_value()) {
+        RCLCPP_WARN(get_logger(), "Straight service re-sampling failed: no new cart_frame");
+        return std::nullopt;
+      }
+      first_sample = next_first_sample.value();
     }
 
-    double min_x = samples.front().x;
-    double max_x = samples.front().x;
-    double min_y = samples.front().y;
-    double max_y = samples.front().y;
+    RCLCPP_WARN(get_logger(), "Straight service samples rejected after %d attempts",
+                kStraightSampleRetryCount);
+    return std::nullopt;
+  }
+
+  std::optional<CartFrame> robust_average_cart_frame(const std::vector<CartFrame> & samples,
+                                                     const CartFrame & reference_frame)
+  {
+    const auto median_x = median_value(samples, [](const CartFrame & sample) { return sample.x; });
+    const auto median_y = median_value(samples, [](const CartFrame & sample) { return sample.y; });
+
+    std::vector<CartFrame> inliers;
+    for (const auto & sample : samples) {
+      if (std::abs(sample.x - median_x) <= straight_sample_max_spread_ &&
+          std::abs(sample.y - median_y) <= straight_sample_max_spread_) {
+        inliers.push_back(sample);
+      } else {
+        RCLCPP_WARN(get_logger(),
+                    "Straight service sample outlier dropped: cart_frame=(%.3f, %.3f), "
+                    "median=(%.3f, %.3f), max_delta=%.3f",
+                    sample.x, sample.y, median_x, median_y, straight_sample_max_spread_);
+      }
+    }
+
+    if (static_cast<int>(inliers.size()) < kStraightSampleMinInliers) {
+      RCLCPP_WARN(get_logger(), "Straight service samples rejected: only %zu/%zu inliers",
+                  inliers.size(), samples.size());
+      return std::nullopt;
+    }
+
+    double min_x = inliers.front().x;
+    double max_x = inliers.front().x;
+    double min_y = inliers.front().y;
+    double max_y = inliers.front().y;
     double sum_x = 0.0;
     double sum_y = 0.0;
     double sum_laser_x = 0.0;
     double sum_laser_y = 0.0;
 
-    for (const auto & sample : samples) {
+    for (const auto & sample : inliers) {
       min_x = std::min(min_x, sample.x);
       max_x = std::max(max_x, sample.x);
       min_y = std::min(min_y, sample.y);
@@ -799,28 +849,46 @@ private:
 
     const double x_spread = max_x - min_x;
     const double y_spread = max_y - min_y;
-    const double average_x = sum_x / static_cast<double>(samples.size());
-    const double average_y = sum_y / static_cast<double>(samples.size());
-    const double average_laser_x = sum_laser_x / static_cast<double>(samples.size());
-    const double average_laser_y = sum_laser_y / static_cast<double>(samples.size());
+    const double average_x = sum_x / static_cast<double>(inliers.size());
+    const double average_y = sum_y / static_cast<double>(inliers.size());
+    const double average_laser_x = sum_laser_x / static_cast<double>(inliers.size());
+    const double average_laser_y = sum_laser_y / static_cast<double>(inliers.size());
 
     RCLCPP_INFO(get_logger(),
-                "Straight service sample summary: count=%zu, average[%s]=(%.3f, %.3f), "
-                "average_laser[%s]=(%.3f, %.3f), x_spread=%.3f, y_spread=%.3f",
-                samples.size(), first_cart_frame.frame_id.c_str(), average_x, average_y,
-                first_cart_frame.laser_frame_id.c_str(), average_laser_x, average_laser_y, x_spread,
-                y_spread);
+                "Straight service robust sample summary: total=%zu, inliers=%zu, "
+                "average[%s]=(%.3f, %.3f), average_laser[%s]=(%.3f, %.3f), "
+                "x_spread=%.3f, y_spread=%.3f, median=(%.3f, %.3f)",
+                samples.size(), inliers.size(), reference_frame.frame_id.c_str(), average_x,
+                average_y, reference_frame.laser_frame_id.c_str(), average_laser_x, average_laser_y,
+                x_spread, y_spread, median_x, median_y);
 
     if (x_spread > straight_sample_max_spread_ || y_spread > straight_sample_max_spread_) {
       RCLCPP_WARN(get_logger(),
-                  "Straight service samples rejected: spread too large "
+                  "Straight service inlier samples rejected: spread too large "
                   "(x_spread=%.3f, y_spread=%.3f, max=%.3f)",
                   x_spread, y_spread, straight_sample_max_spread_);
       return std::nullopt;
     }
 
-    return CartFrame{average_x,       average_y,       first_cart_frame.frame_id,
-                     average_laser_x, average_laser_y, first_cart_frame.laser_frame_id};
+    return CartFrame{average_x,       average_y,       reference_frame.frame_id,
+                     average_laser_x, average_laser_y, reference_frame.laser_frame_id};
+  }
+
+  template <typename GetterT>
+  double median_value(const std::vector<CartFrame> & samples, GetterT getter)
+  {
+    std::vector<double> values;
+    values.reserve(samples.size());
+    for (const auto & sample : samples) {
+      values.push_back(getter(sample));
+    }
+
+    std::sort(values.begin(), values.end());
+    const size_t middle = values.size() / 2;
+    if (values.size() % 2 == 1) {
+      return values[middle];
+    }
+    return (values[middle - 1] + values[middle]) / 2.0;
   }
 
   std::optional<CartFrame> recover_cart_frame_after_motion(const CartFrame & previous,
@@ -1075,6 +1143,8 @@ private:
   double straight_sample_max_spread_;
   std::string target_base_frame_;
 
+  static constexpr int kStraightSampleRetryCount = 3;
+  static constexpr int kStraightSampleMinInliers = 3;
   static constexpr double kPi = 3.14159265358979323846;
 };
 
