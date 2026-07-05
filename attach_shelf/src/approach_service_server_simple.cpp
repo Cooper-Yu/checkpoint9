@@ -32,8 +32,7 @@ public:
         yaw_tolerance_(0.05),
         center_distance_tolerance_(0.20),
         forward_step_distance_(0.20),
-        max_centering_steps_(8),
-        movement_timeout_(12.0),
+        movement_timeout_(30.0),
         conservative_offset_(0.0),
         final_drive_distance_(0.30)
   {
@@ -43,6 +42,7 @@ public:
     declare_parameter<double>("final_drive_distance", final_drive_distance_);
     declare_parameter<double>("center_distance_tolerance", center_distance_tolerance_);
     declare_parameter<double>("forward_step_distance", forward_step_distance_);
+    declare_parameter<double>("movement_timeout", movement_timeout_);
 
     rotate_speed_ = get_parameter("rotate_speed").as_double();
     forward_speed_ = get_parameter("forward_speed").as_double();
@@ -50,6 +50,7 @@ public:
     final_drive_distance_ = get_parameter("final_drive_distance").as_double();
     center_distance_tolerance_ = get_parameter("center_distance_tolerance").as_double();
     forward_step_distance_ = get_parameter("forward_step_distance").as_double();
+    movement_timeout_ = get_parameter("movement_timeout").as_double();
 
     scan_callback_group_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
     service_callback_group_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
@@ -302,14 +303,16 @@ private:
   {
     CartFrame cart_frame = initial_cart_frame;
     double accumulated_yaw = 0.0;
+    const auto start_time = now();
+    int step = 0;
 
     RCLCPP_INFO(get_logger(),
                 "Stepwise final approach started: center_tolerance=%.3f m, "
-                "forward_step=%.3f m, max_steps=%d, final_push=%.3f m",
-                center_distance_tolerance_, forward_step_distance_, max_centering_steps_,
+                "forward_step=%.3f m, movement_timeout=%.3f s, final_push=%.3f m",
+                center_distance_tolerance_, forward_step_distance_, movement_timeout_,
                 final_drive_distance_);
 
-    for (int step = 0; step < max_centering_steps_; ++step) {
+    while (rclcpp::ok() && (now() - start_time).seconds() < movement_timeout_) {
       const double target_yaw = std::atan2(cart_frame.y, cart_frame.x);
       const double distance_to_center = std::hypot(cart_frame.x, cart_frame.y);
       RCLCPP_INFO(get_logger(),
@@ -342,16 +345,13 @@ private:
         return false;
       }
       cart_frame = updated_cart_frame.value();
+      ++step;
+    }
 
-      if (step == max_centering_steps_ - 1) {
-        const double final_distance = std::hypot(cart_frame.x, cart_frame.y);
-        if (final_distance > center_distance_tolerance_) {
-          RCLCPP_WARN(get_logger(),
-                      "Stepwise final approach stopped after max steps with remaining distance %.3f m",
-                      final_distance);
-          return false;
-        }
-      }
+    if ((now() - start_time).seconds() >= movement_timeout_) {
+      RCLCPP_WARN(get_logger(), "Stepwise final approach timed out after %.3f seconds",
+                  movement_timeout_);
+      return false;
     }
 
     RCLCPP_INFO(get_logger(), "Reversing accumulated yaw correction: %.3f rad", -accumulated_yaw);
@@ -506,7 +506,6 @@ private:
   double yaw_tolerance_;
   double center_distance_tolerance_;
   double forward_step_distance_;
-  int max_centering_steps_;
   double movement_timeout_;
   double conservative_offset_;
   double final_drive_distance_;
