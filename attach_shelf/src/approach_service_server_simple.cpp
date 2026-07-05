@@ -313,9 +313,13 @@ private:
       return false;
     }
 
+    log_cart_frame_diagnostic("after driving to planned cart_frame center");
+
     if (!rotate_by_yaw_open_loop(-target_yaw, "Reverse initial yaw correction")) {
       return false;
     }
+
+    log_cart_frame_diagnostic("after reversing initial yaw correction");
 
     if (!drive_forward_open_loop(final_drive_distance_, "Final shelf push")) {
       return false;
@@ -325,6 +329,23 @@ private:
     elevator_up_pub_->publish(elevator_msg);
     RCLCPP_INFO(get_logger(), "One-shot final approach complete; published /elevator_up");
     return true;
+  }
+
+  void log_cart_frame_diagnostic(const std::string & label)
+  {
+    rclcpp::sleep_for(300ms);
+    auto cart_frame = detect_cart_frame();
+    if (!cart_frame.has_value()) {
+      RCLCPP_WARN(get_logger(), "Cart-frame diagnostic %s: detection failed", label.c_str());
+      return;
+    }
+
+    const double remaining_distance = std::hypot(cart_frame->x, cart_frame->y);
+    const double remaining_yaw = std::atan2(cart_frame->y, cart_frame->x);
+    RCLCPP_INFO(get_logger(),
+                "Cart-frame diagnostic %s: remaining cart_frame=(%.3f, %.3f), "
+                "remaining_distance=%.3f m, remaining_yaw=%.3f rad",
+                label.c_str(), cart_frame->x, cart_frame->y, remaining_distance, remaining_yaw);
   }
 
   bool rotate_by_yaw_open_loop(double target_yaw, const std::string & label)
