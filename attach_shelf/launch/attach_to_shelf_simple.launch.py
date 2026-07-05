@@ -35,8 +35,8 @@ def generate_launch_description():
 
     pre_approach_only = Node(
         package="attach_shelf",
-        executable="pre_approach_simple",
-        name="pre_approach_simple",
+        executable="pre_approach",
+        name="pre_approach",
         output="screen",
         parameters=pre_approach_params,
         condition=UnlessCondition(final_approach),
@@ -44,8 +44,8 @@ def generate_launch_description():
 
     pre_approach_before_attach = Node(
         package="attach_shelf",
-        executable="pre_approach_simple",
-        name="pre_approach_simple",
+        executable="pre_approach",
+        name="pre_approach",
         output="screen",
         parameters=pre_approach_params,
         condition=IfCondition(final_approach),
@@ -69,7 +69,7 @@ def generate_launch_description():
             DeclareLaunchArgument("obstacle", default_value="0.4"),
             DeclareLaunchArgument("degrees", default_value="-90.0"),
             DeclareLaunchArgument("final_approach", default_value="false"),
-            DeclareLaunchArgument("forward_speed", default_value="0.2"),
+            DeclareLaunchArgument("forward_speed", default_value="0.4"),
             DeclareLaunchArgument("angular_speed", default_value="0.5"),
             DeclareLaunchArgument("rotation_scale", default_value="0.5"),
             DeclareLaunchArgument("service_forward_speed", default_value="0.2"),
