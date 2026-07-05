@@ -31,6 +31,10 @@ public:
         rotate_speed_(0.3),
         forward_speed_(0.2),
         yaw_tolerance_(0.05),
+        center_distance_tolerance_(0.20),
+        max_step_yaw_(0.25),
+        forward_step_distance_(0.20),
+        max_centering_steps_(8),
         movement_timeout_(12.0),
         conservative_offset_(0.0),
         final_drive_distance_(0.30)
@@ -39,11 +43,17 @@ public:
     declare_parameter<double>("forward_speed", forward_speed_);
     declare_parameter<double>("conservative_offset", conservative_offset_);
     declare_parameter<double>("final_drive_distance", final_drive_distance_);
+    declare_parameter<double>("center_distance_tolerance", center_distance_tolerance_);
+    declare_parameter<double>("max_step_yaw", max_step_yaw_);
+    declare_parameter<double>("forward_step_distance", forward_step_distance_);
 
     rotate_speed_ = get_parameter("rotate_speed").as_double();
     forward_speed_ = get_parameter("forward_speed").as_double();
     conservative_offset_ = get_parameter("conservative_offset").as_double();
     final_drive_distance_ = get_parameter("final_drive_distance").as_double();
+    center_distance_tolerance_ = get_parameter("center_distance_tolerance").as_double();
+    max_step_yaw_ = get_parameter("max_step_yaw").as_double();
+    forward_step_distance_ = get_parameter("forward_step_distance").as_double();
 
     scan_callback_group_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
     service_callback_group_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
@@ -116,7 +126,7 @@ private:
       return;
     }
 
-    response->complete = perform_one_shot_final_approach(cart_frame.value());
+    response->complete = perform_stepwise_final_approach(cart_frame.value());
     if (!response->complete) {
       publish_stop();
       RCLCPP_WARN(get_logger(),
@@ -293,33 +303,69 @@ private:
     }
   }
 
-  bool perform_one_shot_final_approach(const CartFrame & cart_frame)
+  bool perform_stepwise_final_approach(const CartFrame & initial_cart_frame)
   {
-    const double target_yaw = std::atan2(cart_frame.y, cart_frame.x);
-    const double distance_to_center = std::hypot(cart_frame.x, cart_frame.y);
-    const double drive_distance = std::max(distance_to_center - conservative_offset_, 0.0);
+    CartFrame cart_frame = initial_cart_frame;
+    double accumulated_yaw = 0.0;
 
     RCLCPP_INFO(get_logger(),
-                "One-shot plan: target_yaw=%.3f rad, distance_to_center=%.3f m, "
-                "drive_distance=%.3f m, reverse_yaw=%.3f rad, final_push=%.3f m",
-                target_yaw, distance_to_center, drive_distance, -target_yaw,
-                final_drive_distance_);
+                "Stepwise final approach started: center_tolerance=%.3f m, max_step_yaw=%.3f rad, "
+                "forward_step=%.3f m, max_steps=%d, final_push=%.3f m",
+                center_distance_tolerance_, max_step_yaw_, forward_step_distance_,
+                max_centering_steps_, final_drive_distance_);
 
-    if (!rotate_by_yaw_open_loop(target_yaw, "Rotate toward cart_frame")) {
+    for (int step = 0; step < max_centering_steps_; ++step) {
+      const double target_yaw = std::atan2(cart_frame.y, cart_frame.x);
+      const double distance_to_center = std::hypot(cart_frame.x, cart_frame.y);
+      RCLCPP_INFO(get_logger(),
+                  "Stepwise center step %d: cart_frame=(%.3f, %.3f), distance=%.3f m, "
+                  "target_yaw=%.3f rad, accumulated_yaw=%.3f rad",
+                  step, cart_frame.x, cart_frame.y, distance_to_center, target_yaw,
+                  accumulated_yaw);
+
+      if (distance_to_center <= center_distance_tolerance_) {
+        RCLCPP_INFO(get_logger(), "Reached cart center tolerance: %.3f <= %.3f",
+                    distance_to_center, center_distance_tolerance_);
+        break;
+      }
+
+      const double yaw_correction = std::clamp(target_yaw, -max_step_yaw_, max_step_yaw_);
+      if (!rotate_by_yaw_open_loop(yaw_correction, "Stepwise yaw correction")) {
+        return false;
+      }
+      accumulated_yaw += yaw_correction;
+
+      const double drive_distance =
+          std::min(forward_step_distance_, std::max(distance_to_center - conservative_offset_, 0.0));
+      if (!drive_forward_open_loop(drive_distance, "Stepwise drive toward cart center")) {
+        return false;
+      }
+
+      auto updated_cart_frame = wait_for_cart_frame(1.0);
+      if (!updated_cart_frame.has_value()) {
+        RCLCPP_WARN(get_logger(),
+                    "Stepwise final approach failed: cannot detect cart_frame after step %d", step);
+        return false;
+      }
+      cart_frame = updated_cart_frame.value();
+
+      if (step == max_centering_steps_ - 1) {
+        const double final_distance = std::hypot(cart_frame.x, cart_frame.y);
+        if (final_distance > center_distance_tolerance_) {
+          RCLCPP_WARN(get_logger(),
+                      "Stepwise final approach stopped after max steps with remaining distance %.3f m",
+                      final_distance);
+          return false;
+        }
+      }
+    }
+
+    RCLCPP_INFO(get_logger(), "Reversing accumulated yaw correction: %.3f rad", -accumulated_yaw);
+    if (!rotate_by_yaw_open_loop(-accumulated_yaw, "Reverse accumulated yaw correction")) {
       return false;
     }
 
-    if (!drive_forward_open_loop(drive_distance, "Drive toward one-shot cart_frame")) {
-      return false;
-    }
-
-    log_cart_frame_diagnostic("after driving to planned cart_frame center");
-
-    if (!rotate_by_yaw_open_loop(-target_yaw, "Reverse initial yaw correction")) {
-      return false;
-    }
-
-    log_cart_frame_diagnostic("after reversing initial yaw correction");
+    log_cart_frame_diagnostic("after reversing accumulated yaw correction");
 
     if (!drive_forward_open_loop(final_drive_distance_, "Final shelf push")) {
       return false;
@@ -465,6 +511,10 @@ private:
   double rotate_speed_;
   double forward_speed_;
   double yaw_tolerance_;
+  double center_distance_tolerance_;
+  double max_step_yaw_;
+  double forward_step_distance_;
+  int max_centering_steps_;
   double movement_timeout_;
   double conservative_offset_;
   double final_drive_distance_;

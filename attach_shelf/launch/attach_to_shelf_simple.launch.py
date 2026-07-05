@@ -19,6 +19,9 @@ def generate_launch_description():
     service_rotate_speed = LaunchConfiguration("service_rotate_speed")
     conservative_offset = LaunchConfiguration("conservative_offset")
     final_drive_distance = LaunchConfiguration("final_drive_distance")
+    center_distance_tolerance = LaunchConfiguration("center_distance_tolerance")
+    max_step_yaw = LaunchConfiguration("max_step_yaw")
+    forward_step_distance = LaunchConfiguration("forward_step_distance")
     use_rviz = LaunchConfiguration("use_rviz")
 
     rviz_config = [FindPackageShare("attach_shelf"), "/rviz/pre_approach.rviz"]
@@ -76,6 +79,9 @@ def generate_launch_description():
             DeclareLaunchArgument("service_rotate_speed", default_value="0.3"),
             DeclareLaunchArgument("conservative_offset", default_value="0.0"),
             DeclareLaunchArgument("final_drive_distance", default_value="0.30"),
+            DeclareLaunchArgument("center_distance_tolerance", default_value="0.20"),
+            DeclareLaunchArgument("max_step_yaw", default_value="0.25"),
+            DeclareLaunchArgument("forward_step_distance", default_value="0.20"),
             DeclareLaunchArgument("use_rviz", default_value="true"),
             Node(
                 package="rviz2",
@@ -96,6 +102,9 @@ def generate_launch_description():
                         "rotate_speed": ParameterValue(service_rotate_speed, value_type=float),
                         "conservative_offset": ParameterValue(conservative_offset, value_type=float),
                         "final_drive_distance": ParameterValue(final_drive_distance, value_type=float),
+                        "center_distance_tolerance": ParameterValue(center_distance_tolerance, value_type=float),
+                        "max_step_yaw": ParameterValue(max_step_yaw, value_type=float),
+                        "forward_step_distance": ParameterValue(forward_step_distance, value_type=float),
                     }
                 ],
                 condition=IfCondition(final_approach),
