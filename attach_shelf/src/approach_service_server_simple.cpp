@@ -32,6 +32,7 @@ public:
         yaw_tolerance_(0.05),
         center_distance_tolerance_(0.20),
         forward_step_distance_(0.20),
+        max_cart_frame_y_jump_(0.35),
         movement_timeout_(30.0),
         conservative_offset_(0.0),
         final_drive_distance_(0.30)
@@ -42,6 +43,7 @@ public:
     declare_parameter<double>("final_drive_distance", final_drive_distance_);
     declare_parameter<double>("center_distance_tolerance", center_distance_tolerance_);
     declare_parameter<double>("forward_step_distance", forward_step_distance_);
+    declare_parameter<double>("max_cart_frame_y_jump", max_cart_frame_y_jump_);
     declare_parameter<double>("movement_timeout", movement_timeout_);
 
     rotate_speed_ = get_parameter("rotate_speed").as_double();
@@ -50,6 +52,7 @@ public:
     final_drive_distance_ = get_parameter("final_drive_distance").as_double();
     center_distance_tolerance_ = get_parameter("center_distance_tolerance").as_double();
     forward_step_distance_ = get_parameter("forward_step_distance").as_double();
+    max_cart_frame_y_jump_ = get_parameter("max_cart_frame_y_jump").as_double();
     movement_timeout_ = get_parameter("movement_timeout").as_double();
 
     scan_callback_group_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
@@ -302,7 +305,6 @@ private:
   bool perform_stepwise_final_approach(const CartFrame & initial_cart_frame)
   {
     CartFrame cart_frame = initial_cart_frame;
-    double accumulated_yaw = 0.0;
     const auto start_time = now();
     int step = 0;
 
@@ -317,9 +319,8 @@ private:
       const double distance_to_center = std::hypot(cart_frame.x, cart_frame.y);
       RCLCPP_INFO(get_logger(),
                   "Stepwise center step %d: cart_frame=(%.3f, %.3f), distance=%.3f m, "
-                  "target_yaw=%.3f rad, accumulated_yaw=%.3f rad",
-                  step, cart_frame.x, cart_frame.y, distance_to_center, target_yaw,
-                  accumulated_yaw);
+                  "target_yaw=%.3f rad",
+                  step, cart_frame.x, cart_frame.y, distance_to_center, target_yaw);
 
       if (distance_to_center <= center_distance_tolerance_) {
         RCLCPP_INFO(get_logger(), "Reached cart center tolerance: %.3f <= %.3f",
@@ -330,7 +331,6 @@ private:
       if (!rotate_by_yaw_open_loop(target_yaw, "Stepwise yaw correction")) {
         return false;
       }
-      accumulated_yaw += target_yaw;
 
       const double drive_distance =
           std::min(forward_step_distance_, std::max(distance_to_center - conservative_offset_, 0.0));
@@ -344,6 +344,13 @@ private:
                     "Stepwise final approach failed: cannot detect cart_frame after step %d", step);
         return false;
       }
+      if (!cart_frame_is_continuous(cart_frame, updated_cart_frame.value())) {
+        RCLCPP_WARN(get_logger(),
+                    "Stepwise final approach failed: cart_frame jumped from (%.3f, %.3f) to "
+                    "(%.3f, %.3f)",
+                    cart_frame.x, cart_frame.y, updated_cart_frame->x, updated_cart_frame->y);
+        return false;
+      }
       cart_frame = updated_cart_frame.value();
       ++step;
     }
@@ -354,13 +361,6 @@ private:
       return false;
     }
 
-    RCLCPP_INFO(get_logger(), "Reversing accumulated yaw correction: %.3f rad", -accumulated_yaw);
-    if (!rotate_by_yaw_open_loop(-accumulated_yaw, "Reverse accumulated yaw correction")) {
-      return false;
-    }
-
-    log_cart_frame_diagnostic("after reversing accumulated yaw correction");
-
     if (!drive_forward_open_loop(final_drive_distance_, "Final shelf push")) {
       return false;
     }
@@ -368,6 +368,20 @@ private:
     std_msgs::msg::String elevator_msg;
     elevator_up_pub_->publish(elevator_msg);
     RCLCPP_INFO(get_logger(), "One-shot final approach complete; published /elevator_up");
+    return true;
+  }
+
+  bool cart_frame_is_continuous(const CartFrame & previous, const CartFrame & current)
+  {
+    const double y_jump = std::abs(current.y - previous.y);
+    if (y_jump > max_cart_frame_y_jump_) {
+      RCLCPP_WARN(get_logger(),
+                  "Rejecting cart_frame jump: previous_y=%.3f, current_y=%.3f, y_jump=%.3f, "
+                  "max_y_jump=%.3f",
+                  previous.y, current.y, y_jump, max_cart_frame_y_jump_);
+      return false;
+    }
+
     return true;
   }
 
@@ -506,6 +520,7 @@ private:
   double yaw_tolerance_;
   double center_distance_tolerance_;
   double forward_step_distance_;
+  double max_cart_frame_y_jump_;
   double movement_timeout_;
   double conservative_offset_;
   double final_drive_distance_;
