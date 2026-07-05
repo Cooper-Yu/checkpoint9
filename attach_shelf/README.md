@@ -46,7 +46,22 @@ Task 2 launch:
 ros2 launch attach_shelf attach_to_shelf.launch.py obstacle:=0.4 degrees:=-90 final_approach:=false
 ```
 
-Use `final_approach:=true` to request the service server to drive under the shelf and publish `/elevator_up`.
+Validated final-approach tuning used during training:
+
+```bash
+ros2 launch attach_shelf attach_to_shelf.launch.py \
+  obstacle:=0.4 \
+  degrees:=-90 \
+  final_approach:=true \
+  use_tf_rotation:=true \
+  center_drive_scale:=3.3 \
+  service_lateral_yaw_gain:=0.4 \
+  final_drive_distance:=0.30 \
+  verify_center_before_final_push:=false \
+  target_base_frame:=robot_base_link
+```
+
+Use `final_approach:=true` to start `approach_service_server`; `pre_approach_v2` then calls `/approach_shelf`, drives under the shelf, and publishes `/elevator_up`.
 
 ## Parameters
 
@@ -55,7 +70,7 @@ Use `final_approach:=true` to request the service server to drive under the shel
 - `forward_speed`: forward velocity in meters per second. Default: `0.4`.
 - `angular_speed`: rotation velocity in radians per second. Default: `0.5`.
 - `rotation_scale`: multiplier applied to the open-loop rotation time. Default: `0.5`.
-- `final_approach`: Task 2 boolean. When `false`, the service detects and publishes `cart_frame` only. When `true`, it performs the final attach motion.
+- `final_approach`: Task 2 boolean. When `false`, launch runs only the Task 1 pre-approach. When `true`, `pre_approach_v2` calls `/approach_shelf` after the pre-approach rotation.
 - `use_rviz`: whether to start RViz. Default: `true`.
 
 ## Interfaces

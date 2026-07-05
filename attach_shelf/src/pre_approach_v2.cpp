@@ -10,6 +10,10 @@
 #include "geometry_msgs/msg/twist.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/laser_scan.hpp"
+#include "tf2/utils.h"
+#include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
+#include "tf2_ros/buffer.h"
+#include "tf2_ros/transform_listener.h"
 
 using namespace std::chrono_literals;
 
@@ -23,20 +27,30 @@ public:
         forward_speed_(0.4),
         angular_speed_(0.5),
         rotation_scale_(0.5),
+        use_tf_rotation_(false),
+        rotation_tolerance_(0.03),
+        rotation_reference_frame_("odom"),
+        rotation_base_frame_("robot_base_footprint"),
         final_approach_(false),
         rotate_time_(0.0),
+        target_yaw_(0.0),
         invalid_scan_count_(0),
         state_(State::WAITING_FOR_SCAN),
         last_logged_state_(State::WAITING_FOR_SCAN),
         service_call_started_(false),
-        shutdown_requested_(false)
+        shutdown_requested_(false),
+        tf_buffer_(this->get_clock()),
+        tf_listener_(tf_buffer_)
   {
     declare_parameter<double>("obstacle", obstacle_);
     declare_parameter<double>("degrees", degrees_);
     declare_parameter<double>("forward_speed", forward_speed_);
     declare_parameter<double>("angular_speed", angular_speed_);
     declare_parameter<double>("rotation_scale", rotation_scale_);
-    // Task 2 maps this launch parameter directly to GoToLoading.attach_to_shelf.
+    declare_parameter<bool>("use_tf_rotation", use_tf_rotation_);
+    declare_parameter<double>("rotation_tolerance", rotation_tolerance_);
+    declare_parameter<std::string>("rotation_reference_frame", rotation_reference_frame_);
+    declare_parameter<std::string>("rotation_base_frame", rotation_base_frame_);
     declare_parameter<bool>("final_approach", final_approach_);
 
     obstacle_ = get_parameter("obstacle").as_double();
@@ -44,6 +58,10 @@ public:
     forward_speed_ = get_parameter("forward_speed").as_double();
     angular_speed_ = get_parameter("angular_speed").as_double();
     rotation_scale_ = get_parameter("rotation_scale").as_double();
+    use_tf_rotation_ = get_parameter("use_tf_rotation").as_bool();
+    rotation_tolerance_ = get_parameter("rotation_tolerance").as_double();
+    rotation_reference_frame_ = get_parameter("rotation_reference_frame").as_string();
+    rotation_base_frame_ = get_parameter("rotation_base_frame").as_string();
     final_approach_ = get_parameter("final_approach").as_bool();
 
     if (obstacle_ <= 0.0) {
@@ -67,7 +85,13 @@ public:
       RCLCPP_ERROR(get_logger(), "Invalid rotation_scale parameter: %.3f", rotation_scale_);
     }
 
-    // Keep the same calibrated open-loop rotation used by Task 1 before calling the service.
+    if (rotation_tolerance_ <= 0.0) {
+      state_ = State::SAFE_STOP;
+      RCLCPP_ERROR(get_logger(), "Invalid rotation_tolerance parameter: %.3f", rotation_tolerance_);
+    }
+
+    // The rotation is open-loop: publish angular velocity for a calibrated duration.
+    // rotation_scale compensates for the simulator's actual yaw response.
     const double target_angle_rad = degrees_ * kPi / 180.0;
     if (std::abs(target_angle_rad) < 1e-6) {
       rotate_time_ = 0.0;
@@ -85,9 +109,11 @@ public:
     control_timer_ = create_wall_timer(100ms, std::bind(&PreApproachV2::timer_callback, this));
 
     RCLCPP_INFO(get_logger(),
-                "pre_approach_v2 started: obstacle=%.2f m, degrees=%.2f, final_approach=%s, "
-                "rotate_time=%.2f s",
-                obstacle_, degrees_, final_approach_ ? "true" : "false", rotate_time_);
+                "pre_approach_v2 started: obstacle=%.2f m, degrees=%.2f, forward_speed=%.2f m/s, "
+                "angular_speed=%.2f rad/s, rotation_scale=%.2f, rotate_time=%.2f s, "
+                "use_tf_rotation=%s, final_approach=%s",
+                obstacle_, degrees_, forward_speed_, angular_speed_, rotation_scale_, rotate_time_,
+                use_tf_rotation_ ? "true" : "false", final_approach_ ? "true" : "false");
   }
 
 private:
@@ -103,23 +129,26 @@ private:
 
   static constexpr double kPi = 3.14159265358979323846;
   static constexpr double kScanPauseTimeout = 1.0;
-  static constexpr double kScanSafeStopTimeout = 5.0;
 
   bool get_front_distance(const sensor_msgs::msg::LaserScan & scan, double window_degrees,
                           double & front_distance)
   {
     std::vector<double> valid_ranges;
-    const double half_window = window_degrees / 2.0 * kPi / 180.0;
 
-    for (double angle = -half_window; angle < half_window; angle += scan.angle_increment) {
-      const int index =
-          static_cast<int>(std::round((angle - scan.angle_min) / scan.angle_increment));
+    // Use a small window around 0 rad instead of a single ray to reduce noise.
+    double half_window = window_degrees / 2 * kPi / 180;
+
+    for (double i = -half_window; i < half_window; i += scan.angle_increment) {
+      // Convert the desired angle into the matching ranges[] index.
+      int index = static_cast<int>(std::round((i - scan.angle_min) / scan.angle_increment));
 
       if (index < 0 || index >= static_cast<int>(scan.ranges.size())) {
         continue;
       }
 
-      const double distance = scan.ranges[index];
+      double distance = scan.ranges[index];
+
+      // LaserScan can contain inf/nan or readings outside the sensor's valid range.
       if (!std::isfinite(distance) || distance < scan.range_min || distance > scan.range_max) {
         continue;
       }
@@ -127,17 +156,21 @@ private:
       valid_ranges.push_back(distance);
     }
 
-    if (valid_ranges.empty()) {
-      return false;
+    // The closest valid ray in the front window is the conservative obstacle distance.
+    if (!valid_ranges.empty()) {
+      front_distance = *std::min_element(valid_ranges.begin(), valid_ranges.end());
+      return true;
     }
 
-    front_distance = *std::min_element(valid_ranges.begin(), valid_ranges.end());
-    return true;
+    return false;
   }
 
   void scan_callback(const sensor_msgs::msg::LaserScan::SharedPtr msg)
   {
     double distance = 0.0;
+
+    // Keep the last valid front distance so the timer callback can make one
+    // consistent control decision per cycle.
     if (get_front_distance(*msg, 10.0, distance)) {
       front_distance_ = distance;
       last_valid_scan_time_ = now();
@@ -156,8 +189,6 @@ private:
   {
     log_state_if_changed();
 
-    // V2 keeps the Task 1 pre-approach state machine; the only new transition is
-    // DONE -> /approach_shelf service call.
     switch (state_) {
       case State::WAITING_FOR_SCAN: {
         publish_stop();
@@ -171,32 +202,39 @@ private:
           return;
         }
 
-        stop_start_time_ = now();
+        stop_start_time_ = this->now();
         set_state(State::STOP_BEFORE_ROTATE, "already within obstacle threshold");
         return;
       }
 
+      // MOVING_FORWARD -> STOP_BEFORE_ROTATE when front_distance <= obstacle
       case State::MOVING_FORWARD: {
         if (!check_runtime_safety()) {
           return;
         }
 
+        // Move forward until the front obstacle reaches the requested distance.
         publish_forward();
+
         if (front_distance_.value() <= obstacle_) {
           publish_stop();
-          stop_start_time_ = now();
+          stop_start_time_ = this->now();
           set_state(State::STOP_BEFORE_ROTATE, "front distance reached obstacle threshold");
         }
+
         return;
       }
 
+      // STOP_BEFORE_ROTATE -> ROTATING or DONE
       case State::STOP_BEFORE_ROTATE: {
         if (!check_runtime_safety()) {
           return;
         }
 
+        // Publish zero velocity for a short settling window before rotating.
         publish_stop();
-        const double elapsed_stop = (now() - stop_start_time_).seconds();
+        double elapsed_stop = (this->now() - stop_start_time_).seconds();
+
         if (elapsed_stop < 0.2) {
           return;
         }
@@ -206,33 +244,42 @@ private:
           return;
         }
 
-        rotation_start_time_ = now();
+        rotation_start_time_ = this->now();
+        if (use_tf_rotation_ && !start_tf_rotation()) {
+          enter_safe_stop("cannot start TF rotation");
+          return;
+        }
         set_state(State::ROTATING, "settling stop complete");
         return;
       }
 
+      // ROTATING -> DONE after rotate_time_
       case State::ROTATING: {
-        if (!check_runtime_safety()) {
+        if (use_tf_rotation_) {
+          rotate_with_tf_feedback();
           return;
         }
 
-        const double elapsed = (now() - rotation_start_time_).seconds();
+        // Continue publishing angular velocity; a single Twist message is not enough.
+        double elapsed = (this->now() - rotation_start_time_).seconds();
         if (elapsed < rotate_time_) {
           publish_rotate();
         } else {
           publish_stop();
           set_state(State::DONE, "rotation duration complete");
         }
+
         return;
       }
 
+      // SAFE_STOP and DONE should publish_stop().
       case State::SAFE_STOP: {
         publish_stop();
-        request_shutdown("pre_approach_v2 stopped safely");
         return;
       }
 
       case State::DONE: {
+        publish_stop();
         call_approach_service_once();
         return;
       }
@@ -247,15 +294,10 @@ private:
     }
 
     const double scan_age = (now() - last_valid_scan_time_).seconds();
-    if (scan_age > kScanSafeStopTimeout) {
-      enter_safe_stop("latest valid scan exceeded the safe stop timeout");
-      return false;
-    }
-
     if (scan_age > kScanPauseTimeout) {
-      RCLCPP_WARN_THROTTLE(
-          get_logger(), *get_clock(), 1000,
-          "Waiting for a fresh front scan before continuing; latest is %.2f seconds old", scan_age);
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000,
+                           "Stopping until a fresh front scan arrives; latest is %.2f seconds old",
+                           scan_age);
       publish_stop();
       return false;
     }
@@ -308,46 +350,6 @@ private:
     last_logged_state_ = state_;
   }
 
-  void call_approach_service_once()
-  {
-    publish_stop();
-
-    // DONE is visited by the timer repeatedly, so guard against sending duplicate requests.
-    if (service_call_started_) {
-      if ((now() - service_request_time_).seconds() > 20.0) {
-        enter_safe_stop("/approach_shelf timed out");
-      }
-      return;
-    }
-    service_call_started_ = true;
-    service_request_time_ = now();
-
-    if (!approach_client_->wait_for_service(3s)) {
-      enter_safe_stop("/approach_shelf is not available");
-      return;
-    }
-
-    auto request = std::make_shared<attach_shelf::srv::GoToLoading::Request>();
-    request->attach_to_shelf = final_approach_;
-
-    RCLCPP_INFO(get_logger(), "Calling /approach_shelf with attach_to_shelf=%s",
-                request->attach_to_shelf ? "true" : "false");
-
-    // Use an async response callback so the single-threaded executor can still process the reply.
-    approach_client_->async_send_request(
-        request, [this](rclcpp::Client<attach_shelf::srv::GoToLoading>::SharedFuture future) {
-          const auto response = future.get();
-          RCLCPP_INFO(get_logger(), "/approach_shelf response: complete=%s",
-                      response->complete ? "true" : "false");
-          if (!response->complete) {
-            enter_safe_stop("/approach_shelf returned complete=false");
-            return;
-          }
-
-          request_shutdown("pre_approach_v2 complete");
-        });
-  }
-
   void publish_stop()
   {
     geometry_msgs::msg::Twist cmd;
@@ -371,6 +373,128 @@ private:
     cmd.linear.x = 0.0;
     cmd.angular.z = direction * std::abs(angular_speed_);
     cmd_vel_pub_->publish(cmd);
+  }
+
+  std::optional<double> current_yaw()
+  {
+    try {
+      const auto transform = tf_buffer_.lookupTransform(rotation_reference_frame_,
+                                                        rotation_base_frame_, tf2::TimePointZero);
+      return tf2::getYaw(transform.transform.rotation);
+    } catch (const tf2::TransformException & ex) {
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000, "TF yaw lookup failed: %s", ex.what());
+      return std::nullopt;
+    }
+  }
+
+  double normalize_angle(double angle) const
+  {
+    while (angle > kPi) {
+      angle -= 2.0 * kPi;
+    }
+    while (angle < -kPi) {
+      angle += 2.0 * kPi;
+    }
+    return angle;
+  }
+
+  bool start_tf_rotation()
+  {
+    auto yaw = current_yaw();
+    if (!yaw.has_value()) {
+      return false;
+    }
+
+    const double target_angle_rad = degrees_ * kPi / 180.0;
+    target_yaw_ = normalize_angle(yaw.value() + target_angle_rad);
+    RCLCPP_INFO(get_logger(),
+                "TF rotation started: current_yaw=%.3f rad, target_delta=%.3f rad, "
+                "target_yaw=%.3f rad, tolerance=%.3f rad",
+                yaw.value(), target_angle_rad, target_yaw_, rotation_tolerance_);
+    return true;
+  }
+
+  void rotate_with_tf_feedback()
+  {
+    const double elapsed = (now() - rotation_start_time_).seconds();
+    const double rotation_timeout = std::max(3.0, rotate_time_ * 3.0);
+    if (elapsed > rotation_timeout) {
+      enter_safe_stop("TF rotation timed out");
+      return;
+    }
+
+    auto yaw = current_yaw();
+    if (!yaw.has_value()) {
+      publish_stop();
+      return;
+    }
+
+    const double error = normalize_angle(target_yaw_ - yaw.value());
+    if (std::abs(error) <= rotation_tolerance_) {
+      publish_stop();
+      RCLCPP_INFO(get_logger(),
+                  "TF rotation complete: yaw=%.3f rad, target=%.3f rad, error=%.3f rad",
+                  yaw.value(), target_yaw_, error);
+      set_state(State::DONE, "TF rotation reached target yaw");
+      return;
+    }
+
+    geometry_msgs::msg::Twist cmd;
+    const double commanded_speed =
+        std::min(std::abs(angular_speed_), std::max(0.08, std::abs(error)));
+    cmd.angular.z = error > 0.0 ? commanded_speed : -commanded_speed;
+    cmd_vel_pub_->publish(cmd);
+
+    RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 500,
+                         "TF rotating: yaw=%.3f rad, target=%.3f rad, error=%.3f rad, "
+                         "angular_z=%.3f rad/s",
+                         yaw.value(), target_yaw_, error, cmd.angular.z);
+  }
+
+  void call_approach_service_once()
+  {
+    publish_stop();
+
+    if (!final_approach_) {
+      request_shutdown("pre_approach_v2 complete; final_approach=false");
+      return;
+    }
+
+    // DONE is visited by the timer repeatedly, so guard against duplicate requests.
+    if (service_call_started_) {
+      if ((now() - service_request_time_).seconds() > 45.0) {
+        enter_safe_stop("/approach_shelf timed out");
+        request_shutdown("pre_approach_v2 stopped safely");
+      }
+      return;
+    }
+
+    service_call_started_ = true;
+    service_request_time_ = now();
+
+    if (!approach_client_->wait_for_service(3s)) {
+      enter_safe_stop("/approach_shelf is not available");
+      request_shutdown("pre_approach_v2 stopped safely");
+      return;
+    }
+
+    auto request = std::make_shared<attach_shelf::srv::GoToLoading::Request>();
+    request->attach_to_shelf = true;
+
+    RCLCPP_INFO(get_logger(), "Calling /approach_shelf with attach_to_shelf=true");
+    approach_client_->async_send_request(
+        request, [this](rclcpp::Client<attach_shelf::srv::GoToLoading>::SharedFuture future) {
+          const auto response = future.get();
+          RCLCPP_INFO(get_logger(), "/approach_shelf response: complete=%s",
+                      response->complete ? "true" : "false");
+          if (!response->complete) {
+            enter_safe_stop("/approach_shelf returned complete=false");
+            request_shutdown("pre_approach_v2 stopped safely");
+            return;
+          }
+
+          request_shutdown("pre_approach_v2 complete");
+        });
   }
 
   void enter_safe_stop(const std::string & reason)
@@ -402,8 +526,13 @@ private:
   double forward_speed_;
   double angular_speed_;
   double rotation_scale_;
+  bool use_tf_rotation_;
+  double rotation_tolerance_;
+  std::string rotation_reference_frame_;
+  std::string rotation_base_frame_;
   bool final_approach_;
   double rotate_time_;
+  double target_yaw_;
 
   std::optional<double> front_distance_;
   rclcpp::Time last_valid_scan_time_;
@@ -417,6 +546,8 @@ private:
   std::string safety_stop_reason_;
   bool service_call_started_;
   bool shutdown_requested_;
+  tf2_ros::Buffer tf_buffer_;
+  tf2_ros::TransformListener tf_listener_;
 };
 
 int main(int argc, char ** argv)
