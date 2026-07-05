@@ -35,6 +35,7 @@ public:
         center_lock_distance_(0.35),
         center_lock_min_steps_(2),
         center_drive_scale_(1.5),
+        yaw_correction_steps_(2),
         forward_step_distance_(0.20),
         cart_frame_retry_count_(6),
         movement_timeout_(30.0),
@@ -54,6 +55,7 @@ public:
     declare_parameter<double>("center_lock_distance", center_lock_distance_);
     declare_parameter<int>("center_lock_min_steps", center_lock_min_steps_);
     declare_parameter<double>("center_drive_scale", center_drive_scale_);
+    declare_parameter<int>("yaw_correction_steps", yaw_correction_steps_);
     declare_parameter<double>("forward_step_distance", forward_step_distance_);
     declare_parameter<double>("movement_timeout", movement_timeout_);
     declare_parameter<bool>("enable_final_push", enable_final_push_);
@@ -70,6 +72,7 @@ public:
     center_lock_distance_ = get_parameter("center_lock_distance").as_double();
     center_lock_min_steps_ = get_parameter("center_lock_min_steps").as_int();
     center_drive_scale_ = get_parameter("center_drive_scale").as_double();
+    yaw_correction_steps_ = get_parameter("yaw_correction_steps").as_int();
     forward_step_distance_ = get_parameter("forward_step_distance").as_double();
     movement_timeout_ = get_parameter("movement_timeout").as_double();
     enable_final_push_ = get_parameter("enable_final_push").as_bool();
@@ -378,11 +381,12 @@ private:
     RCLCPP_INFO(get_logger(),
                 "Stepwise final approach started: center_tolerance=%.3f m, "
                 "lateral_tolerance=%.3f m, lock_distance=%.3f m, lock_min_steps=%d, "
-                "center_drive_scale=%.3f, forward_step=%.3f m, movement_timeout=%.3f s, "
-                "final_push=%.3f m, enable_final_push=%s",
+                "center_drive_scale=%.3f, yaw_correction_steps=%d, forward_step=%.3f m, "
+                "movement_timeout=%.3f s, final_push=%.3f m, enable_final_push=%s",
                 center_distance_tolerance_, center_lateral_tolerance_, center_lock_distance_,
-                center_lock_min_steps_, center_drive_scale_, forward_step_distance_,
-                movement_timeout_, final_drive_distance_, enable_final_push_ ? "true" : "false");
+                center_lock_min_steps_, center_drive_scale_, yaw_correction_steps_,
+                forward_step_distance_, movement_timeout_, final_drive_distance_,
+                enable_final_push_ ? "true" : "false");
 
     while (rclcpp::ok() && (now() - start_time).seconds() < movement_timeout_) {
       if (!averaged_cart_frame.has_value()) {
@@ -392,14 +396,18 @@ private:
       }
 
       publish_cart_frame(averaged_cart_frame.value());
-      const double target_yaw = std::atan2(averaged_cart_frame->y, averaged_cart_frame->x);
+      const bool yaw_correction_enabled = step < yaw_correction_steps_;
+      const double detected_target_yaw = std::atan2(averaged_cart_frame->y, averaged_cart_frame->x);
+      const double target_yaw = yaw_correction_enabled ? detected_target_yaw : 0.0;
       const double distance_to_center = std::hypot(averaged_cart_frame->x, averaged_cart_frame->y);
       const double lateral_error = std::abs(averaged_cart_frame->y);
       RCLCPP_INFO(get_logger(),
                   "Stepwise center step %d: cart_frame=(%.3f, %.3f), distance=%.3f m, "
-                  "lateral_error=%.3f m, target_yaw=%.3f rad",
+                  "lateral_error=%.3f m, detected_target_yaw=%.3f rad, target_yaw=%.3f rad, "
+                  "yaw_correction_enabled=%s",
                   step, averaged_cart_frame->x, averaged_cart_frame->y, distance_to_center,
-                  lateral_error, target_yaw);
+                  lateral_error, detected_target_yaw, target_yaw,
+                  yaw_correction_enabled ? "true" : "false");
 
       if (averaged_cart_frame->x <= center_distance_tolerance_ &&
           lateral_error <= center_lateral_tolerance_) {
@@ -835,6 +843,7 @@ private:
   double center_lock_distance_;
   int center_lock_min_steps_;
   double center_drive_scale_;
+  int yaw_correction_steps_;
   double forward_step_distance_;
   int cart_frame_retry_count_;
   double movement_timeout_;
