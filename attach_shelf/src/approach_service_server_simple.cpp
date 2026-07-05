@@ -79,6 +79,9 @@ private:
   {
     double x;
     double y;
+    double angle;
+    double range;
+    size_t index;
     size_t size;
   };
 
@@ -200,8 +203,10 @@ private:
         continue;
       }
 
-      candidates.push_back(LegCandidate{x, y, cluster.size()});
+      candidates.push_back(LegCandidate{x, y, angle, range, index, cluster.size()});
     }
+
+    log_reflective_candidates(candidates, clusters.size(), high_intensity_ray_count, max_intensity);
 
     if (candidates.size() < 2) {
       RCLCPP_WARN(get_logger(),
@@ -222,11 +227,18 @@ private:
         const double leg_separation = std::abs(a.y - b.y);
         const double x_difference = std::abs(a.x - b.x);
         const double midpoint_y = (a.y + b.y) / 2.0;
+        const bool accepted = leg_separation >= min_leg_separation_ &&
+                              x_difference <= max_x_difference_ &&
+                              std::abs(midpoint_y) <= max_midpoint_y_;
         largest_rejected_midpoint_y =
             std::max(largest_rejected_midpoint_y, std::abs(midpoint_y));
 
-        if (leg_separation < min_leg_separation_ || x_difference > max_x_difference_ ||
-            std::abs(midpoint_y) > max_midpoint_y_) {
+        RCLCPP_INFO(get_logger(),
+                    "Reflective pair candidate %zu-%zu: midpoint_y=%.3f, separation=%.3f, "
+                    "x_difference=%.3f, accepted=%s",
+                    i, j, midpoint_y, leg_separation, x_difference, accepted ? "true" : "false");
+
+        if (!accepted) {
           continue;
         }
 
@@ -260,6 +272,25 @@ private:
                 candidates.size());
 
     return CartFrame{x, y, scan.header.frame_id};
+  }
+
+  void log_reflective_candidates(const std::vector<LegCandidate> & candidates, size_t cluster_count,
+                                 size_t high_intensity_ray_count, float max_intensity)
+  {
+    RCLCPP_INFO(get_logger(),
+                "Reflective scan summary: clusters=%zu, front_candidates=%zu, "
+                "high_intensity_rays=%zu, max_intensity=%.1f, threshold=%.1f",
+                cluster_count, candidates.size(), high_intensity_ray_count, max_intensity,
+                intensity_threshold_);
+
+    for (size_t i = 0; i < candidates.size(); ++i) {
+      const auto & candidate = candidates[i];
+      RCLCPP_INFO(get_logger(),
+                  "Reflective candidate %zu: index=%zu, angle=%.3f rad, angle_deg=%.1f, "
+                  "range=%.3f m, x=%.3f, y=%.3f, rays=%zu",
+                  i, candidate.index, candidate.angle, candidate.angle * 180.0 / kPi,
+                  candidate.range, candidate.x, candidate.y, candidate.size);
+    }
   }
 
   bool perform_one_shot_final_approach(const CartFrame & cart_frame)
@@ -416,6 +447,8 @@ private:
   double movement_timeout_;
   double conservative_offset_;
   double final_drive_distance_;
+
+  static constexpr double kPi = 3.14159265358979323846;
 };
 
 int main(int argc, char ** argv)
