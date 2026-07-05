@@ -32,11 +32,14 @@ public:
         yaw_tolerance_(0.05),
         center_lateral_tolerance_(0.05),
         center_distance_tolerance_(0.20),
+        center_lock_distance_(0.35),
+        center_lock_min_steps_(2),
         forward_step_distance_(0.20),
         cart_frame_retry_count_(6),
         movement_timeout_(30.0),
         conservative_offset_(0.0),
         final_drive_distance_(0.30),
+        enable_final_push_(false),
         service_straight_test_(false),
         straight_sample_count_(5),
         straight_sample_max_spread_(0.15)
@@ -47,8 +50,11 @@ public:
     declare_parameter<double>("final_drive_distance", final_drive_distance_);
     declare_parameter<double>("center_lateral_tolerance", center_lateral_tolerance_);
     declare_parameter<double>("center_distance_tolerance", center_distance_tolerance_);
+    declare_parameter<double>("center_lock_distance", center_lock_distance_);
+    declare_parameter<int>("center_lock_min_steps", center_lock_min_steps_);
     declare_parameter<double>("forward_step_distance", forward_step_distance_);
     declare_parameter<double>("movement_timeout", movement_timeout_);
+    declare_parameter<bool>("enable_final_push", enable_final_push_);
     declare_parameter<bool>("service_straight_test", service_straight_test_);
     declare_parameter<int>("straight_sample_count", straight_sample_count_);
     declare_parameter<double>("straight_sample_max_spread", straight_sample_max_spread_);
@@ -59,8 +65,11 @@ public:
     final_drive_distance_ = get_parameter("final_drive_distance").as_double();
     center_lateral_tolerance_ = get_parameter("center_lateral_tolerance").as_double();
     center_distance_tolerance_ = get_parameter("center_distance_tolerance").as_double();
+    center_lock_distance_ = get_parameter("center_lock_distance").as_double();
+    center_lock_min_steps_ = get_parameter("center_lock_min_steps").as_int();
     forward_step_distance_ = get_parameter("forward_step_distance").as_double();
     movement_timeout_ = get_parameter("movement_timeout").as_double();
+    enable_final_push_ = get_parameter("enable_final_push").as_bool();
     service_straight_test_ = get_parameter("service_straight_test").as_bool();
     straight_sample_count_ = get_parameter("straight_sample_count").as_int();
     straight_sample_max_spread_ = get_parameter("straight_sample_max_spread").as_double();
@@ -365,10 +374,12 @@ private:
 
     RCLCPP_INFO(get_logger(),
                 "Stepwise final approach started: center_tolerance=%.3f m, "
-                "lateral_tolerance=%.3f m, forward_step=%.3f m, movement_timeout=%.3f s, "
-                "final_push=%.3f m",
-                center_distance_tolerance_, center_lateral_tolerance_, forward_step_distance_,
-                movement_timeout_, final_drive_distance_);
+                "lateral_tolerance=%.3f m, lock_distance=%.3f m, lock_min_steps=%d, "
+                "forward_step=%.3f m, movement_timeout=%.3f s, final_push=%.3f m, "
+                "enable_final_push=%s",
+                center_distance_tolerance_, center_lateral_tolerance_, center_lock_distance_,
+                center_lock_min_steps_, forward_step_distance_, movement_timeout_,
+                final_drive_distance_, enable_final_push_ ? "true" : "false");
 
     while (rclcpp::ok() && (now() - start_time).seconds() < movement_timeout_) {
       if (!averaged_cart_frame.has_value()) {
@@ -393,6 +404,22 @@ private:
                     "Reached cart center tolerance: x=%.3f <= %.3f and abs(y)=%.3f <= %.3f",
                     averaged_cart_frame->x, center_distance_tolerance_, lateral_error,
                     center_lateral_tolerance_);
+        break;
+      }
+
+      if (step >= center_lock_min_steps_ && averaged_cart_frame->x <= center_lock_distance_) {
+        const double locked_drive_distance =
+            std::max(averaged_cart_frame->x - conservative_offset_, 0.0);
+        RCLCPP_WARN(get_logger(),
+                    "Locking final center approach: step=%d, cart_frame=(%.3f, %.3f), "
+                    "locked_drive_distance=%.3f m. Further cart_frame re-detection is skipped "
+                    "because close-range reflective clusters can jump.",
+                    step, averaged_cart_frame->x, averaged_cart_frame->y, locked_drive_distance);
+        if (!drive_forward_open_loop(locked_drive_distance, "Locked drive to cart center")) {
+          return false;
+        }
+        RCLCPP_INFO(get_logger(),
+                    "Locked center approach complete; robot stopped at detected center");
         break;
       }
 
@@ -421,13 +448,23 @@ private:
       return false;
     }
 
-    if (!drive_forward_open_loop(final_drive_distance_, "Final shelf push")) {
-      return false;
+    if (enable_final_push_) {
+      if (!drive_forward_open_loop(final_drive_distance_, "Final shelf push")) {
+        return false;
+      }
+    } else {
+      RCLCPP_WARN(
+          get_logger(),
+          "Final shelf push skipped because enable_final_push=false; stopping at cart center");
     }
 
     std_msgs::msg::String elevator_msg;
-    elevator_up_pub_->publish(elevator_msg);
-    RCLCPP_INFO(get_logger(), "One-shot final approach complete; published /elevator_up");
+    if (enable_final_push_) {
+      elevator_up_pub_->publish(elevator_msg);
+      RCLCPP_INFO(get_logger(), "One-shot final approach complete; published /elevator_up");
+    } else {
+      RCLCPP_INFO(get_logger(), "Center-only final approach complete; /elevator_up not published");
+    }
     return true;
   }
 
@@ -763,11 +800,14 @@ private:
   double yaw_tolerance_;
   double center_lateral_tolerance_;
   double center_distance_tolerance_;
+  double center_lock_distance_;
+  int center_lock_min_steps_;
   double forward_step_distance_;
   int cart_frame_retry_count_;
   double movement_timeout_;
   double conservative_offset_;
   double final_drive_distance_;
+  bool enable_final_push_;
   bool service_straight_test_;
   int straight_sample_count_;
   double straight_sample_max_spread_;
