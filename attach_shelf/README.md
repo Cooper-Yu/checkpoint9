@@ -64,6 +64,7 @@ The package defaults include the validated TF rotation and final-approach tuning
 - `rotation_scale`: multiplier applied to the open-loop rotation time when TF rotation is disabled. Default: `0.5`.
 - `final_approach`: Task 2 boolean. When `false`, launch runs only the Task 1 pre-approach. When `true`, `pre_approach_v2` calls `/approach_shelf` after the pre-approach rotation.
 - `use_tf_rotation`: whether pre-approach rotation uses TF yaw feedback. Default: `true`.
+- `straight_sample_max_spread`: tolerated cart-frame sample spread during service detection. Default: `0.25`.
 - `use_rviz`: whether to start RViz. Default: `true`.
 
 ## Interfaces

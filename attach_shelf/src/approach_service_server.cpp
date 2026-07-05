@@ -55,7 +55,7 @@ public:
         verify_center_before_final_push_(false),
         service_straight_test_(false),
         straight_sample_count_(5),
-        straight_sample_max_spread_(0.15),
+        straight_sample_max_spread_(0.25),
         target_base_frame_("robot_base_link")
   {
     declare_parameter<double>("rotate_speed", rotate_speed_);
