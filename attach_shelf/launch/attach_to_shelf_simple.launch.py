@@ -23,6 +23,7 @@ def generate_launch_description():
     service_rotate_speed = LaunchConfiguration("service_rotate_speed")
     conservative_offset = LaunchConfiguration("conservative_offset")
     final_drive_distance = LaunchConfiguration("final_drive_distance")
+    center_lateral_tolerance = LaunchConfiguration("center_lateral_tolerance")
     center_distance_tolerance = LaunchConfiguration("center_distance_tolerance")
     forward_step_distance = LaunchConfiguration("forward_step_distance")
     movement_timeout = LaunchConfiguration("movement_timeout")
@@ -94,6 +95,7 @@ def generate_launch_description():
             DeclareLaunchArgument("service_rotate_speed", default_value="0.3"),
             DeclareLaunchArgument("conservative_offset", default_value="0.0"),
             DeclareLaunchArgument("final_drive_distance", default_value="0.30"),
+            DeclareLaunchArgument("center_lateral_tolerance", default_value="0.05"),
             DeclareLaunchArgument("center_distance_tolerance", default_value="0.20"),
             DeclareLaunchArgument("forward_step_distance", default_value="0.20"),
             DeclareLaunchArgument("movement_timeout", default_value="30.0"),
@@ -120,6 +122,9 @@ def generate_launch_description():
                         "rotate_speed": ParameterValue(service_rotate_speed, value_type=float),
                         "conservative_offset": ParameterValue(conservative_offset, value_type=float),
                         "final_drive_distance": ParameterValue(final_drive_distance, value_type=float),
+                        "center_lateral_tolerance": ParameterValue(
+                            center_lateral_tolerance, value_type=float
+                        ),
                         "center_distance_tolerance": ParameterValue(center_distance_tolerance, value_type=float),
                         "forward_step_distance": ParameterValue(forward_step_distance, value_type=float),
                         "movement_timeout": ParameterValue(movement_timeout, value_type=float),

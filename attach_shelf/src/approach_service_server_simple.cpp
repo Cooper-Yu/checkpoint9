@@ -30,6 +30,7 @@ public:
         rotate_speed_(0.3),
         forward_speed_(0.2),
         yaw_tolerance_(0.05),
+        center_lateral_tolerance_(0.05),
         center_distance_tolerance_(0.20),
         forward_step_distance_(0.20),
         cart_frame_retry_count_(6),
@@ -44,6 +45,7 @@ public:
     declare_parameter<double>("forward_speed", forward_speed_);
     declare_parameter<double>("conservative_offset", conservative_offset_);
     declare_parameter<double>("final_drive_distance", final_drive_distance_);
+    declare_parameter<double>("center_lateral_tolerance", center_lateral_tolerance_);
     declare_parameter<double>("center_distance_tolerance", center_distance_tolerance_);
     declare_parameter<double>("forward_step_distance", forward_step_distance_);
     declare_parameter<double>("movement_timeout", movement_timeout_);
@@ -55,6 +57,7 @@ public:
     forward_speed_ = get_parameter("forward_speed").as_double();
     conservative_offset_ = get_parameter("conservative_offset").as_double();
     final_drive_distance_ = get_parameter("final_drive_distance").as_double();
+    center_lateral_tolerance_ = get_parameter("center_lateral_tolerance").as_double();
     center_distance_tolerance_ = get_parameter("center_distance_tolerance").as_double();
     forward_step_distance_ = get_parameter("forward_step_distance").as_double();
     movement_timeout_ = get_parameter("movement_timeout").as_double();
@@ -83,8 +86,9 @@ public:
     tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
 
     approach_service_ = create_service<attach_shelf::srv::GoToLoading>(
-        "/approach_shelf", std::bind(&ApproachServiceServerSimple::handle_approach_request, this,
-                                     std::placeholders::_1, std::placeholders::_2),
+        "/approach_shelf",
+        std::bind(&ApproachServiceServerSimple::handle_approach_request, this,
+                  std::placeholders::_1, std::placeholders::_2),
         rmw_qos_profile_services_default, service_callback_group_);
 
     RCLCPP_INFO(get_logger(), "approach_service_server_simple ready on /approach_shelf");
@@ -105,6 +109,8 @@ private:
     double angle;
     double range;
     size_t index;
+    size_t low_index;
+    size_t high_index;
     size_t size;
   };
 
@@ -218,29 +224,28 @@ private:
     std::vector<LegCandidate> candidates;
     for (const auto & cluster : clusters) {
       const size_t index = cluster[cluster.size() / 2];
-      const double angle = scan.angle_min + index * scan.angle_increment;
-      const double range = scan.ranges[index];
-      const double x = range * std::cos(angle);
-      const double y = range * std::sin(angle);
+      auto candidate =
+          make_leg_candidate(scan, index, cluster.front(), cluster.back(), cluster.size());
 
-      if (x <= 0.0) {
+      if (candidate.x <= 0.0) {
         RCLCPP_INFO(get_logger(),
-                    "Ignoring reflective cluster behind robot: x=%.3f, y=%.3f, rays=%zu", x, y,
-                    cluster.size());
+                    "Ignoring reflective cluster behind robot: x=%.3f, y=%.3f, rays=%zu",
+                    candidate.x, candidate.y, cluster.size());
         continue;
       }
 
-      candidates.push_back(LegCandidate{x, y, angle, range, index, cluster.size()});
+      candidates.push_back(candidate);
     }
 
     log_reflective_candidates(candidates, clusters.size(), high_intensity_ray_count, max_intensity);
 
     if (candidates.size() < 2) {
-      RCLCPP_WARN(get_logger(),
-                  "Cannot detect cart_frame: found %zu front reflective candidates from %zu clusters, "
-                  "need at least 2 (high_intensity_rays=%zu, max_intensity=%.1f, threshold=%.1f)",
-                  candidates.size(), clusters.size(), high_intensity_ray_count, max_intensity,
-                  intensity_threshold_);
+      RCLCPP_WARN(
+          get_logger(),
+          "Cannot detect cart_frame: found %zu front reflective candidates from %zu clusters, "
+          "need at least 2 (high_intensity_rays=%zu, max_intensity=%.1f, threshold=%.1f)",
+          candidates.size(), clusters.size(), high_intensity_ray_count, max_intensity,
+          intensity_threshold_);
       return std::nullopt;
     }
 
@@ -256,8 +261,7 @@ private:
         const double midpoint_y = (a.y + b.y) / 2.0;
         const bool accepted =
             leg_separation >= min_leg_separation_ && x_difference <= max_x_difference_;
-        largest_rejected_midpoint_y =
-            std::max(largest_rejected_midpoint_y, std::abs(midpoint_y));
+        largest_rejected_midpoint_y = std::max(largest_rejected_midpoint_y, std::abs(midpoint_y));
 
         RCLCPP_INFO(get_logger(),
                     "Reflective pair candidate %zu-%zu: midpoint_y=%.3f, separation=%.3f, "
@@ -284,8 +288,9 @@ private:
       return std::nullopt;
     }
 
-    const auto leg_1 = best_pair->first;
-    const auto leg_2 = best_pair->second;
+    auto leg_1 = best_pair->first;
+    auto leg_2 = best_pair->second;
+    choose_inner_edge_pair(scan, leg_1, leg_2);
     const double x = (leg_1.x + leg_2.x) / 2.0;
     const double y = (leg_1.y + leg_2.y) / 2.0;
     const double leg_separation = std::abs(leg_1.y - leg_2.y);
@@ -319,29 +324,75 @@ private:
     }
   }
 
+  LegCandidate make_leg_candidate(const sensor_msgs::msg::LaserScan & scan, size_t index,
+                                  size_t low_index, size_t high_index, size_t size)
+  {
+    const double angle = scan.angle_min + index * scan.angle_increment;
+    const double range = scan.ranges[index];
+    const double x = range * std::cos(angle);
+    const double y = range * std::sin(angle);
+    return LegCandidate{x, y, angle, range, index, low_index, high_index, size};
+  }
+
+  void choose_inner_edge_pair(const sensor_msgs::msg::LaserScan & scan, LegCandidate & leg_1,
+                              LegCandidate & leg_2)
+  {
+    // The shelf opening is bounded by the two inner reflective edges, not the cluster centers.
+    const bool leg_1_is_right = leg_1.y < leg_2.y;
+    const size_t leg_1_inner_index = leg_1_is_right ? leg_1.high_index : leg_1.low_index;
+    const size_t leg_2_inner_index = leg_1_is_right ? leg_2.low_index : leg_2.high_index;
+    const auto leg_1_center = leg_1;
+    const auto leg_2_center = leg_2;
+
+    leg_1 =
+        make_leg_candidate(scan, leg_1_inner_index, leg_1.low_index, leg_1.high_index, leg_1.size);
+    leg_2 =
+        make_leg_candidate(scan, leg_2_inner_index, leg_2.low_index, leg_2.high_index, leg_2.size);
+
+    RCLCPP_INFO(get_logger(),
+                "Selected inner shelf-leg edges: leg1 center_index=%zu inner_index=%zu "
+                "center=(%.3f, %.3f) inner=(%.3f, %.3f), leg2 center_index=%zu "
+                "inner_index=%zu center=(%.3f, %.3f) inner=(%.3f, %.3f)",
+                leg_1_center.index, leg_1.index, leg_1_center.x, leg_1_center.y, leg_1.x, leg_1.y,
+                leg_2_center.index, leg_2.index, leg_2_center.x, leg_2_center.y, leg_2.x, leg_2.y);
+  }
+
   bool perform_stepwise_final_approach(const CartFrame & initial_cart_frame)
   {
-    CartFrame cart_frame = initial_cart_frame;
     const auto start_time = now();
+    auto averaged_cart_frame = sample_average_cart_frame(initial_cart_frame);
     int step = 0;
 
     RCLCPP_INFO(get_logger(),
                 "Stepwise final approach started: center_tolerance=%.3f m, "
-                "forward_step=%.3f m, movement_timeout=%.3f s, final_push=%.3f m",
-                center_distance_tolerance_, forward_step_distance_, movement_timeout_,
-                final_drive_distance_);
+                "lateral_tolerance=%.3f m, forward_step=%.3f m, movement_timeout=%.3f s, "
+                "final_push=%.3f m",
+                center_distance_tolerance_, center_lateral_tolerance_, forward_step_distance_,
+                movement_timeout_, final_drive_distance_);
 
     while (rclcpp::ok() && (now() - start_time).seconds() < movement_timeout_) {
-      const double target_yaw = std::atan2(cart_frame.y, cart_frame.x);
-      const double distance_to_center = std::hypot(cart_frame.x, cart_frame.y);
+      if (!averaged_cart_frame.has_value()) {
+        RCLCPP_WARN(get_logger(),
+                    "Stepwise final approach failed: cart_frame samples were not stable");
+        return false;
+      }
+
+      publish_cart_frame(averaged_cart_frame.value());
+      const double target_yaw = std::atan2(averaged_cart_frame->y, averaged_cart_frame->x);
+      const double distance_to_center = std::hypot(averaged_cart_frame->x, averaged_cart_frame->y);
+      const double lateral_error = std::abs(averaged_cart_frame->y);
       RCLCPP_INFO(get_logger(),
                   "Stepwise center step %d: cart_frame=(%.3f, %.3f), distance=%.3f m, "
-                  "target_yaw=%.3f rad",
-                  step, cart_frame.x, cart_frame.y, distance_to_center, target_yaw);
+                  "lateral_error=%.3f m, target_yaw=%.3f rad",
+                  step, averaged_cart_frame->x, averaged_cart_frame->y, distance_to_center,
+                  lateral_error, target_yaw);
 
-      if (distance_to_center <= center_distance_tolerance_) {
-        RCLCPP_INFO(get_logger(), "Reached cart center tolerance: %.3f <= %.3f",
-                    distance_to_center, center_distance_tolerance_);
+      if (averaged_cart_frame->x <= center_distance_tolerance_ &&
+          lateral_error <= center_lateral_tolerance_) {
+        RCLCPP_INFO(get_logger(),
+                    "Reached cart center tolerance: x=%.3f <= %.3f and abs(y)=%.3f <= %.3f",
+                    averaged_cart_frame->x, center_distance_tolerance_, lateral_error,
+                    center_lateral_tolerance_);
         break;
       }
 
@@ -349,25 +400,18 @@ private:
         return false;
       }
 
-      const double drive_distance =
-          std::min(forward_step_distance_, std::max(distance_to_center - conservative_offset_, 0.0));
+      const double drive_distance = std::min(
+          forward_step_distance_, std::max(averaged_cart_frame->x - conservative_offset_, 0.0));
       if (!drive_forward_open_loop(drive_distance, "Stepwise drive toward cart center")) {
         return false;
       }
 
-      auto updated_cart_frame = wait_for_cart_frame(1.0);
-      if (!updated_cart_frame.has_value()) {
-        RCLCPP_WARN(get_logger(),
-                    "Stepwise final approach failed: cannot detect cart_frame after step %d", step);
+      if (!rotate_by_yaw_open_loop(-target_yaw, "Stepwise yaw recovery")) {
         return false;
       }
-      auto recovered_cart_frame =
-          recover_cart_frame_after_motion(cart_frame, updated_cart_frame.value(), drive_distance);
-      if (!recovered_cart_frame.has_value()) {
-        RCLCPP_WARN(get_logger(), "Stepwise final approach failed: cart_frame stayed unstable");
-        return false;
-      }
-      cart_frame = recovered_cart_frame.value();
+
+      log_cart_frame_diagnostic("after stepwise center drive");
+      averaged_cart_frame = sample_average_cart_frame_after_motion();
       ++step;
     }
 
@@ -405,8 +449,8 @@ private:
                   "SERVICE STRAIGHT TEST MODE: skipping service yaw correction. "
                   "averaged_cart_frame=(%.3f, %.3f), remaining_distance=%.3f m, "
                   "straight_distance=%.3f m, center_tolerance=%.3f m",
-                  averaged_cart_frame->x, averaged_cart_frame->y, remaining_distance, straight_distance,
-                  center_distance_tolerance_);
+                  averaged_cart_frame->x, averaged_cart_frame->y, remaining_distance,
+                  straight_distance, center_distance_tolerance_);
 
       if (remaining_distance <= center_distance_tolerance_ ||
           averaged_cart_frame->x <= center_distance_tolerance_) {
@@ -414,11 +458,13 @@ private:
                     "Straight service reached detected cart center: remaining_distance=%.3f m, "
                     "remaining_x=%.3f m",
                     remaining_distance, averaged_cart_frame->x);
-        const double center_trim_distance = std::max(averaged_cart_frame->x - conservative_offset_, 0.0);
+        const double center_trim_distance =
+            std::max(averaged_cart_frame->x - conservative_offset_, 0.0);
         if (center_trim_distance > 0.02) {
-          RCLCPP_INFO(get_logger(),
-                      "Straight service trimming remaining center distance before final push: %.3f m",
-                      center_trim_distance);
+          RCLCPP_INFO(
+              get_logger(),
+              "Straight service trimming remaining center distance before final push: %.3f m",
+              center_trim_distance);
           if (!drive_forward_open_loop(center_trim_distance, "Straight test final center trim")) {
             return false;
           }
@@ -547,14 +593,14 @@ private:
 
       if (cart_frame_progress_is_plausible(previous, retry_cart_frame.value(), drive_distance)) {
         RCLCPP_INFO(get_logger(),
-                    "cart_frame recovery retry %d/%d accepted: recovered=(%.3f, %.3f)",
-                    retry, cart_frame_retry_count_, retry_cart_frame->x, retry_cart_frame->y);
+                    "cart_frame recovery retry %d/%d accepted: recovered=(%.3f, %.3f)", retry,
+                    cart_frame_retry_count_, retry_cart_frame->x, retry_cart_frame->y);
         return retry_cart_frame;
       }
 
       RCLCPP_WARN(get_logger(),
-                  "cart_frame recovery retry %d/%d still suspicious: recovered=(%.3f, %.3f)",
-                  retry, cart_frame_retry_count_, retry_cart_frame->x, retry_cart_frame->y);
+                  "cart_frame recovery retry %d/%d still suspicious: recovered=(%.3f, %.3f)", retry,
+                  cart_frame_retry_count_, retry_cart_frame->x, retry_cart_frame->y);
     }
 
     return std::nullopt;
@@ -666,8 +712,8 @@ private:
     const auto start_time = now();
     rclcpp::Rate rate(20.0);
 
-    RCLCPP_INFO(get_logger(), "%s: distance=%.3f m, speed=%.3f m/s, duration=%.3f s",
-                label.c_str(), distance, forward_speed_, drive_time);
+    RCLCPP_INFO(get_logger(), "%s: distance=%.3f m, speed=%.3f m/s, duration=%.3f s", label.c_str(),
+                distance, forward_speed_, drive_time);
 
     while (rclcpp::ok() && (now() - start_time).seconds() < drive_time) {
       cmd_vel_pub_->publish(cmd);
@@ -715,6 +761,7 @@ private:
   double rotate_speed_;
   double forward_speed_;
   double yaw_tolerance_;
+  double center_lateral_tolerance_;
   double center_distance_tolerance_;
   double forward_step_distance_;
   int cart_frame_retry_count_;
