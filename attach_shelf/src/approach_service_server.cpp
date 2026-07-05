@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <limits>
@@ -169,6 +170,7 @@ private:
   void scan_callback(const sensor_msgs::msg::LaserScan::SharedPtr msg)
   {
     latest_scan_ = *msg;
+    ++scan_sequence_;
   }
 
   void handle_approach_request(
@@ -758,16 +760,17 @@ private:
 
       RCLCPP_INFO(get_logger(),
                   "Straight service sampling started: attempt=%d/%d, target_samples=%d, "
-                  "max_spread=%.3f m, stop_before_sampling=%s",
+                  "max_spread=%.3f m, stop_before_sampling=%s, source=/scan updates",
                   attempt, kStraightSampleRetryCount, straight_sample_count_,
                   straight_sample_max_spread_, stop_before_sampling ? "true" : "false");
 
+      auto last_scan_sequence = scan_sequence_.load();
       for (int i = 1; i < straight_sample_count_; ++i) {
-        rclcpp::sleep_for(200ms);
-        auto cart_frame = wait_for_cart_frame(0.5);
+        auto cart_frame = wait_for_next_cart_frame(last_scan_sequence, 0.5);
         if (!cart_frame.has_value()) {
-          RCLCPP_WARN(get_logger(), "Straight service sample %d/%d failed: no cart_frame", i + 1,
-                      straight_sample_count_);
+          RCLCPP_WARN(get_logger(),
+                      "Straight service sample %d/%d failed: no cart_frame from a new /scan",
+                      i + 1, straight_sample_count_);
           return std::nullopt;
         }
 
@@ -799,6 +802,29 @@ private:
 
     RCLCPP_WARN(get_logger(), "Straight service samples rejected after %d attempts",
                 kStraightSampleRetryCount);
+    return std::nullopt;
+  }
+
+  std::optional<CartFrame> wait_for_next_cart_frame(size_t & last_scan_sequence,
+                                                    double timeout_seconds)
+  {
+    const auto start_time = now();
+    rclcpp::Rate rate(100.0);
+
+    while (rclcpp::ok() && (now() - start_time).seconds() < timeout_seconds) {
+      const auto current_scan_sequence = scan_sequence_.load();
+      if (current_scan_sequence == last_scan_sequence) {
+        rate.sleep();
+        continue;
+      }
+
+      last_scan_sequence = current_scan_sequence;
+      auto cart_frame = detect_cart_frame();
+      if (cart_frame.has_value()) {
+        return cart_frame;
+      }
+    }
+
     return std::nullopt;
   }
 
@@ -1111,6 +1137,7 @@ private:
   std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
 
   std::optional<sensor_msgs::msg::LaserScan> latest_scan_;
+  std::atomic_size_t scan_sequence_{0};
 
   double intensity_threshold_;
   int min_cluster_size_;
