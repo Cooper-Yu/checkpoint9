@@ -36,7 +36,9 @@ public:
         movement_timeout_(30.0),
         conservative_offset_(0.0),
         final_drive_distance_(0.30),
-        service_straight_test_(false)
+        service_straight_test_(false),
+        straight_sample_count_(5),
+        straight_sample_max_spread_(0.15)
   {
     declare_parameter<double>("rotate_speed", rotate_speed_);
     declare_parameter<double>("forward_speed", forward_speed_);
@@ -46,6 +48,8 @@ public:
     declare_parameter<double>("forward_step_distance", forward_step_distance_);
     declare_parameter<double>("movement_timeout", movement_timeout_);
     declare_parameter<bool>("service_straight_test", service_straight_test_);
+    declare_parameter<int>("straight_sample_count", straight_sample_count_);
+    declare_parameter<double>("straight_sample_max_spread", straight_sample_max_spread_);
 
     rotate_speed_ = get_parameter("rotate_speed").as_double();
     forward_speed_ = get_parameter("forward_speed").as_double();
@@ -55,9 +59,17 @@ public:
     forward_step_distance_ = get_parameter("forward_step_distance").as_double();
     movement_timeout_ = get_parameter("movement_timeout").as_double();
     service_straight_test_ = get_parameter("service_straight_test").as_bool();
+    straight_sample_count_ = get_parameter("straight_sample_count").as_int();
+    straight_sample_max_spread_ = get_parameter("straight_sample_max_spread").as_double();
 
     scan_callback_group_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
     service_callback_group_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+
+    if (straight_sample_count_ <= 0) {
+      RCLCPP_WARN(get_logger(), "straight_sample_count=%d is invalid; using 1",
+                  straight_sample_count_);
+      straight_sample_count_ = 1;
+    }
 
     rclcpp::SubscriptionOptions scan_options;
     scan_options.callback_group = scan_callback_group_;
@@ -377,11 +389,18 @@ private:
 
   bool perform_straight_test_final_approach(const CartFrame & cart_frame)
   {
-    const double straight_distance = std::max(cart_frame.x - conservative_offset_, 0.0);
+    auto averaged_cart_frame = sample_average_cart_frame(cart_frame);
+    if (!averaged_cart_frame.has_value()) {
+      RCLCPP_WARN(get_logger(), "Straight test failed: cart_frame samples were not stable");
+      return false;
+    }
+
+    const double straight_distance = std::max(averaged_cart_frame->x - conservative_offset_, 0.0);
     RCLCPP_WARN(get_logger(),
                 "SERVICE STRAIGHT TEST MODE: skipping service yaw correction. "
-                "cart_frame=(%.3f, %.3f), straight_distance=%.3f m, final_push=%.3f m",
-                cart_frame.x, cart_frame.y, straight_distance, final_drive_distance_);
+                "averaged_cart_frame=(%.3f, %.3f), straight_distance=%.3f m, final_push=%.3f m",
+                averaged_cart_frame->x, averaged_cart_frame->y, straight_distance,
+                final_drive_distance_);
 
     if (!drive_forward_open_loop(straight_distance, "Straight test drive to detected cart x")) {
       return false;
@@ -397,6 +416,67 @@ private:
     elevator_up_pub_->publish(elevator_msg);
     RCLCPP_INFO(get_logger(), "Straight test final approach complete; published /elevator_up");
     return true;
+  }
+
+  std::optional<CartFrame> sample_average_cart_frame(const CartFrame & first_cart_frame)
+  {
+    std::vector<CartFrame> samples;
+    samples.push_back(first_cart_frame);
+    publish_stop();
+
+    RCLCPP_INFO(get_logger(),
+                "Straight service sampling started: target_samples=%d, max_spread=%.3f m",
+                straight_sample_count_, straight_sample_max_spread_);
+
+    for (int i = 1; i < straight_sample_count_; ++i) {
+      rclcpp::sleep_for(200ms);
+      auto cart_frame = wait_for_cart_frame(0.5);
+      if (!cart_frame.has_value()) {
+        RCLCPP_WARN(get_logger(), "Straight service sample %d/%d failed: no cart_frame", i + 1,
+                    straight_sample_count_);
+        return std::nullopt;
+      }
+
+      samples.push_back(cart_frame.value());
+      RCLCPP_INFO(get_logger(), "Straight service sample %d/%d: cart_frame=(%.3f, %.3f)", i + 1,
+                  straight_sample_count_, cart_frame->x, cart_frame->y);
+    }
+
+    double min_x = samples.front().x;
+    double max_x = samples.front().x;
+    double min_y = samples.front().y;
+    double max_y = samples.front().y;
+    double sum_x = 0.0;
+    double sum_y = 0.0;
+
+    for (const auto & sample : samples) {
+      min_x = std::min(min_x, sample.x);
+      max_x = std::max(max_x, sample.x);
+      min_y = std::min(min_y, sample.y);
+      max_y = std::max(max_y, sample.y);
+      sum_x += sample.x;
+      sum_y += sample.y;
+    }
+
+    const double x_spread = max_x - min_x;
+    const double y_spread = max_y - min_y;
+    const double average_x = sum_x / static_cast<double>(samples.size());
+    const double average_y = sum_y / static_cast<double>(samples.size());
+
+    RCLCPP_INFO(get_logger(),
+                "Straight service sample summary: count=%zu, average=(%.3f, %.3f), "
+                "x_spread=%.3f, y_spread=%.3f",
+                samples.size(), average_x, average_y, x_spread, y_spread);
+
+    if (x_spread > straight_sample_max_spread_ || y_spread > straight_sample_max_spread_) {
+      RCLCPP_WARN(get_logger(),
+                  "Straight service samples rejected: spread too large "
+                  "(x_spread=%.3f, y_spread=%.3f, max=%.3f)",
+                  x_spread, y_spread, straight_sample_max_spread_);
+      return std::nullopt;
+    }
+
+    return CartFrame{average_x, average_y, first_cart_frame.frame_id};
   }
 
   std::optional<CartFrame> recover_cart_frame_after_motion(const CartFrame & previous,
@@ -599,6 +679,8 @@ private:
   double conservative_offset_;
   double final_drive_distance_;
   bool service_straight_test_;
+  int straight_sample_count_;
+  double straight_sample_max_spread_;
 
   static constexpr double kPi = 3.14159265358979323846;
 };

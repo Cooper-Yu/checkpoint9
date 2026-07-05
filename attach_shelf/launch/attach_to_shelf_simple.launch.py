@@ -27,6 +27,8 @@ def generate_launch_description():
     forward_step_distance = LaunchConfiguration("forward_step_distance")
     movement_timeout = LaunchConfiguration("movement_timeout")
     service_straight_test = LaunchConfiguration("service_straight_test")
+    straight_sample_count = LaunchConfiguration("straight_sample_count")
+    straight_sample_max_spread = LaunchConfiguration("straight_sample_max_spread")
     use_rviz = LaunchConfiguration("use_rviz")
 
     rviz_config = [FindPackageShare("attach_shelf"), "/rviz/pre_approach.rviz"]
@@ -96,6 +98,8 @@ def generate_launch_description():
             DeclareLaunchArgument("forward_step_distance", default_value="0.20"),
             DeclareLaunchArgument("movement_timeout", default_value="30.0"),
             DeclareLaunchArgument("service_straight_test", default_value="false"),
+            DeclareLaunchArgument("straight_sample_count", default_value="5"),
+            DeclareLaunchArgument("straight_sample_max_spread", default_value="0.15"),
             DeclareLaunchArgument("use_rviz", default_value="true"),
             Node(
                 package="rviz2",
@@ -120,6 +124,8 @@ def generate_launch_description():
                         "forward_step_distance": ParameterValue(forward_step_distance, value_type=float),
                         "movement_timeout": ParameterValue(movement_timeout, value_type=float),
                         "service_straight_test": ParameterValue(service_straight_test, value_type=bool),
+                        "straight_sample_count": ParameterValue(straight_sample_count, value_type=int),
+                        "straight_sample_max_spread": ParameterValue(straight_sample_max_spread, value_type=float),
                     }
                 ],
                 condition=IfCondition(final_approach),
