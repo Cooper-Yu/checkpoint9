@@ -483,15 +483,20 @@ private:
       const double target_yaw = yaw_correction_enabled ? raw_target_yaw * lateral_yaw_gain_ : 0.0;
       const double distance_to_center = std::hypot(averaged_cart_frame->x, averaged_cart_frame->y);
       const double lateral_error = std::abs(averaged_cart_frame->y);
+      const bool yaw_needs_rotation = std::abs(target_yaw) >= yaw_tolerance_;
+      const bool smooth_forward =
+          step > 0 && !yaw_needs_rotation && lateral_error <= center_lateral_tolerance_;
       RCLCPP_INFO(get_logger(),
                   "Stepwise center step %d: cart_frame=(%.3f, %.3f), distance=%.3f m, "
                   "lateral_error=%.3f m, raw_target_yaw=%.3f rad, lateral_yaw_gain=%.3f, "
                   "applied_target_yaw=%.3f rad, yaw_correction_enabled=%s, "
-                  "min_yaw_correction_distance=%.3f m, restore_yaw_after_correction=%s",
+                  "min_yaw_correction_distance=%.3f m, restore_yaw_after_correction=%s, "
+                  "smooth_forward=%s",
                   step, averaged_cart_frame->x, averaged_cart_frame->y, distance_to_center,
                   lateral_error, raw_target_yaw, lateral_yaw_gain_, target_yaw,
                   yaw_correction_enabled ? "true" : "false", min_yaw_correction_distance_,
-                  restore_yaw_after_correction_ ? "true" : "false");
+                  restore_yaw_after_correction_ ? "true" : "false",
+                  smooth_forward ? "true" : "false");
 
       if (averaged_cart_frame->x <= center_distance_tolerance_ &&
           lateral_error <= center_lateral_tolerance_) {
@@ -523,13 +528,21 @@ private:
         break;
       }
 
-      if (!rotate_by_yaw_open_loop(target_yaw, "Stepwise yaw correction")) {
-        return false;
+      if (yaw_needs_rotation) {
+        if (!rotate_by_yaw_open_loop(target_yaw, "Stepwise yaw correction")) {
+          return false;
+        }
+      } else {
+        RCLCPP_INFO(get_logger(),
+                    "Stepwise yaw correction skipped without stop: target_yaw %.3f is within "
+                    "tolerance %.3f",
+                    target_yaw, yaw_tolerance_);
       }
 
       const double drive_distance = std::min(
           forward_step_distance_, std::max(averaged_cart_frame->x - conservative_offset_, 0.0));
-      if (!drive_forward_open_loop(drive_distance, "Stepwise drive toward cart center")) {
+      if (!drive_forward_open_loop(drive_distance, "Stepwise drive toward cart center",
+                                   !smooth_forward)) {
         return false;
       }
 
@@ -544,7 +557,7 @@ private:
       }
 
       log_cart_frame_diagnostic("after stepwise center drive");
-      averaged_cart_frame = sample_average_cart_frame_after_motion();
+      averaged_cart_frame = sample_average_cart_frame_after_motion(!smooth_forward);
       ++step;
     }
 
@@ -689,7 +702,7 @@ private:
     return true;
   }
 
-  std::optional<CartFrame> sample_average_cart_frame_after_motion()
+  std::optional<CartFrame> sample_average_cart_frame_after_motion(bool stop_before_sampling = true)
   {
     auto cart_frame = wait_for_cart_frame(1.0);
     if (!cart_frame.has_value()) {
@@ -697,18 +710,23 @@ private:
       return std::nullopt;
     }
 
-    return sample_average_cart_frame(cart_frame.value());
+    return sample_average_cart_frame(cart_frame.value(), stop_before_sampling);
   }
 
-  std::optional<CartFrame> sample_average_cart_frame(const CartFrame & first_cart_frame)
+  std::optional<CartFrame> sample_average_cart_frame(const CartFrame & first_cart_frame,
+                                                    bool stop_before_sampling = true)
   {
     std::vector<CartFrame> samples;
     samples.push_back(first_cart_frame);
-    publish_stop();
+    if (stop_before_sampling) {
+      publish_stop();
+    }
 
     RCLCPP_INFO(get_logger(),
-                "Straight service sampling started: target_samples=%d, max_spread=%.3f m",
-                straight_sample_count_, straight_sample_max_spread_);
+                "Straight service sampling started: target_samples=%d, max_spread=%.3f m, "
+                "stop_before_sampling=%s",
+                straight_sample_count_, straight_sample_max_spread_,
+                stop_before_sampling ? "true" : "false");
 
     for (int i = 1; i < straight_sample_count_; ++i) {
       rclcpp::sleep_for(200ms);
@@ -911,7 +929,7 @@ private:
     return true;
   }
 
-  bool drive_forward_open_loop(double distance, const std::string & label)
+  bool drive_forward_open_loop(double distance, const std::string & label, bool stop_after = true)
   {
     if (distance <= 0.0) {
       RCLCPP_INFO(get_logger(), "%s skipped: distance %.3f is not positive", label.c_str(),
@@ -938,16 +956,20 @@ private:
     const auto start_time = now();
     rclcpp::Rate rate(20.0);
 
-    RCLCPP_INFO(get_logger(), "%s: distance=%.3f m, speed=%.3f m/s, duration=%.3f s", label.c_str(),
-                distance, forward_speed_, drive_time);
+    RCLCPP_INFO(get_logger(),
+                "%s: distance=%.3f m, speed=%.3f m/s, duration=%.3f s, stop_after=%s",
+                label.c_str(), distance, forward_speed_, drive_time,
+                stop_after ? "true" : "false");
 
     while (rclcpp::ok() && (now() - start_time).seconds() < drive_time) {
       cmd_vel_pub_->publish(cmd);
       rate.sleep();
     }
 
-    publish_stop();
-    rclcpp::sleep_for(200ms);
+    if (stop_after) {
+      publish_stop();
+      rclcpp::sleep_for(200ms);
+    }
     return true;
   }
 
