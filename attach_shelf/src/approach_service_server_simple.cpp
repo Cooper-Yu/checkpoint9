@@ -27,7 +27,7 @@ public:
         min_cluster_size_(2),
         max_x_difference_(0.75),
         min_leg_separation_(0.25),
-        max_midpoint_y_(0.35),
+        max_midpoint_y_(0.55),
         rotate_speed_(0.3),
         forward_speed_(0.2),
         yaw_tolerance_(0.05),
