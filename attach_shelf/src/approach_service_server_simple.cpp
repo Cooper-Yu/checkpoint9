@@ -448,6 +448,8 @@ private:
       return false;
     }
 
+    log_final_center_verification();
+
     if (enable_final_push_) {
       if (!drive_forward_open_loop(final_drive_distance_, "Final shelf push")) {
         return false;
@@ -466,6 +468,30 @@ private:
       RCLCPP_INFO(get_logger(), "Center-only final approach complete; /elevator_up not published");
     }
     return true;
+  }
+
+  void log_final_center_verification()
+  {
+    publish_stop();
+    rclcpp::sleep_for(300ms);
+
+    auto verification_cart_frame = wait_for_cart_frame(1.0);
+    if (!verification_cart_frame.has_value()) {
+      RCLCPP_WARN(get_logger(),
+                  "Final center verification only: cart_frame detection failed after stopping; "
+                  "no extra motion command was sent");
+      return;
+    }
+
+    const double remaining_distance =
+        std::hypot(verification_cart_frame->x, verification_cart_frame->y);
+    const double remaining_yaw = std::atan2(verification_cart_frame->y, verification_cart_frame->x);
+    RCLCPP_WARN(get_logger(),
+                "Final center verification only: detected cart_frame=(%.3f, %.3f), "
+                "remaining_distance=%.3f m, lateral_error=%.3f m, remaining_yaw=%.3f rad. "
+                "No extra motion command was sent.",
+                verification_cart_frame->x, verification_cart_frame->y, remaining_distance,
+                std::abs(verification_cart_frame->y), remaining_yaw);
   }
 
   bool perform_straight_test_final_approach(const CartFrame & cart_frame)
