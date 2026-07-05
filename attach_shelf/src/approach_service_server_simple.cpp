@@ -35,6 +35,7 @@ public:
         center_lock_distance_(0.35),
         center_lock_min_steps_(2),
         center_drive_scale_(1.5),
+        center_extra_forward_distance_(0.05),
         yaw_correction_steps_(2),
         forward_step_distance_(0.20),
         cart_frame_retry_count_(6),
@@ -55,6 +56,7 @@ public:
     declare_parameter<double>("center_lock_distance", center_lock_distance_);
     declare_parameter<int>("center_lock_min_steps", center_lock_min_steps_);
     declare_parameter<double>("center_drive_scale", center_drive_scale_);
+    declare_parameter<double>("center_extra_forward_distance", center_extra_forward_distance_);
     declare_parameter<int>("yaw_correction_steps", yaw_correction_steps_);
     declare_parameter<double>("forward_step_distance", forward_step_distance_);
     declare_parameter<double>("movement_timeout", movement_timeout_);
@@ -72,6 +74,7 @@ public:
     center_lock_distance_ = get_parameter("center_lock_distance").as_double();
     center_lock_min_steps_ = get_parameter("center_lock_min_steps").as_int();
     center_drive_scale_ = get_parameter("center_drive_scale").as_double();
+    center_extra_forward_distance_ = get_parameter("center_extra_forward_distance").as_double();
     yaw_correction_steps_ = get_parameter("yaw_correction_steps").as_int();
     forward_step_distance_ = get_parameter("forward_step_distance").as_double();
     movement_timeout_ = get_parameter("movement_timeout").as_double();
@@ -381,12 +384,13 @@ private:
     RCLCPP_INFO(get_logger(),
                 "Stepwise final approach started: center_tolerance=%.3f m, "
                 "lateral_tolerance=%.3f m, lock_distance=%.3f m, lock_min_steps=%d, "
-                "center_drive_scale=%.3f, yaw_correction_steps=%d, forward_step=%.3f m, "
-                "movement_timeout=%.3f s, final_push=%.3f m, enable_final_push=%s",
+                "center_drive_scale=%.3f, center_extra_forward=%.3f m, "
+                "yaw_correction_steps=%d, forward_step=%.3f m, movement_timeout=%.3f s, "
+                "final_push=%.3f m, enable_final_push=%s",
                 center_distance_tolerance_, center_lateral_tolerance_, center_lock_distance_,
-                center_lock_min_steps_, center_drive_scale_, yaw_correction_steps_,
-                forward_step_distance_, movement_timeout_, final_drive_distance_,
-                enable_final_push_ ? "true" : "false");
+                center_lock_min_steps_, center_drive_scale_, center_extra_forward_distance_,
+                yaw_correction_steps_, forward_step_distance_, movement_timeout_,
+                final_drive_distance_, enable_final_push_ ? "true" : "false");
 
     while (rclcpp::ok() && (now() - start_time).seconds() < movement_timeout_) {
       if (!averaged_cart_frame.has_value()) {
@@ -462,7 +466,19 @@ private:
       return false;
     }
 
-    log_final_center_verification();
+    log_final_center_verification("after center approach");
+
+    if (center_extra_forward_distance_ > 0.0) {
+      RCLCPP_WARN(get_logger(),
+                  "Center calibration extra forward drive: distance=%.3f m. This is separate from "
+                  "the final shelf push and does not publish /elevator_up.",
+                  center_extra_forward_distance_);
+      if (!drive_forward_open_loop(center_extra_forward_distance_,
+                                   "Center calibration extra forward drive")) {
+        return false;
+      }
+      log_final_center_verification("after center calibration extra forward");
+    }
 
     if (enable_final_push_) {
       if (!drive_forward_open_loop(final_drive_distance_, "Final shelf push")) {
@@ -484,16 +500,18 @@ private:
     return true;
   }
 
-  void log_final_center_verification()
+  void log_final_center_verification(const std::string & label)
   {
     publish_stop();
     rclcpp::sleep_for(300ms);
 
     auto verification_cart_frame = wait_for_cart_frame(1.0);
     if (!verification_cart_frame.has_value()) {
-      RCLCPP_WARN(get_logger(),
-                  "Final center verification only: cart_frame detection failed after stopping; "
-                  "no extra motion command was sent");
+      RCLCPP_WARN(
+          get_logger(),
+          "Final center verification only (%s): cart_frame detection failed after stopping; "
+          "no extra motion command was sent",
+          label.c_str());
       return;
     }
 
@@ -501,11 +519,11 @@ private:
         std::hypot(verification_cart_frame->x, verification_cart_frame->y);
     const double remaining_yaw = std::atan2(verification_cart_frame->y, verification_cart_frame->x);
     RCLCPP_WARN(get_logger(),
-                "Final center verification only: detected cart_frame=(%.3f, %.3f), "
+                "Final center verification only (%s): detected cart_frame=(%.3f, %.3f), "
                 "remaining_distance=%.3f m, lateral_error=%.3f m, remaining_yaw=%.3f rad. "
                 "No extra motion command was sent.",
-                verification_cart_frame->x, verification_cart_frame->y, remaining_distance,
-                std::abs(verification_cart_frame->y), remaining_yaw);
+                label.c_str(), verification_cart_frame->x, verification_cart_frame->y,
+                remaining_distance, std::abs(verification_cart_frame->y), remaining_yaw);
   }
 
   bool perform_straight_test_final_approach(const CartFrame & cart_frame)
@@ -843,6 +861,7 @@ private:
   double center_lock_distance_;
   int center_lock_min_steps_;
   double center_drive_scale_;
+  double center_extra_forward_distance_;
   int yaw_correction_steps_;
   double forward_step_distance_;
   int cart_frame_retry_count_;
