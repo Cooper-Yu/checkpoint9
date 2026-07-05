@@ -43,6 +43,7 @@ public:
         center_drive_scale_(1.5),
         center_extra_forward_distance_(0.0),
         yaw_correction_steps_(3),
+        lateral_yaw_gain_(0.4),
         min_yaw_correction_distance_(0.55),
         restore_yaw_after_correction_(false),
         forward_step_distance_(0.20),
@@ -70,6 +71,7 @@ public:
     declare_parameter<double>("center_drive_scale", center_drive_scale_);
     declare_parameter<double>("center_extra_forward_distance", center_extra_forward_distance_);
     declare_parameter<int>("yaw_correction_steps", yaw_correction_steps_);
+    declare_parameter<double>("lateral_yaw_gain", lateral_yaw_gain_);
     declare_parameter<double>("min_yaw_correction_distance", min_yaw_correction_distance_);
     declare_parameter<bool>("restore_yaw_after_correction", restore_yaw_after_correction_);
     declare_parameter<double>("forward_step_distance", forward_step_distance_);
@@ -94,6 +96,7 @@ public:
     center_drive_scale_ = get_parameter("center_drive_scale").as_double();
     center_extra_forward_distance_ = get_parameter("center_extra_forward_distance").as_double();
     yaw_correction_steps_ = get_parameter("yaw_correction_steps").as_int();
+    lateral_yaw_gain_ = get_parameter("lateral_yaw_gain").as_double();
     min_yaw_correction_distance_ = get_parameter("min_yaw_correction_distance").as_double();
     restore_yaw_after_correction_ = get_parameter("restore_yaw_after_correction").as_bool();
     forward_step_distance_ = get_parameter("forward_step_distance").as_double();
@@ -459,11 +462,11 @@ private:
                 "Stepwise final approach started: center_tolerance=%.3f m, "
                 "lateral_tolerance=%.3f m, lock_distance=%.3f m, lock_min_steps=%d, "
                 "center_drive_scale=%.3f, center_extra_forward=%.3f m, "
-                "yaw_correction_steps=%d, forward_step=%.3f m, movement_timeout=%.3f s, "
-                "final_push=%.3f m, enable_final_push=%s",
+                "yaw_correction_steps=%d, lateral_yaw_gain=%.3f, forward_step=%.3f m, "
+                "movement_timeout=%.3f s, final_push=%.3f m, enable_final_push=%s",
                 center_distance_tolerance_, center_lateral_tolerance_, center_lock_distance_,
                 center_lock_min_steps_, center_drive_scale_, center_extra_forward_distance_,
-                yaw_correction_steps_, forward_step_distance_, movement_timeout_,
+                yaw_correction_steps_, lateral_yaw_gain_, forward_step_distance_, movement_timeout_,
                 final_drive_distance_, enable_final_push_ ? "true" : "false");
 
     while (rclcpp::ok() && (now() - start_time).seconds() < movement_timeout_) {
@@ -476,17 +479,17 @@ private:
       publish_cart_frame(averaged_cart_frame.value());
       const bool yaw_correction_enabled =
           step < yaw_correction_steps_ && averaged_cart_frame->x > min_yaw_correction_distance_;
-      const double detected_target_yaw = std::atan2(averaged_cart_frame->y, averaged_cart_frame->x);
-      const double target_yaw = yaw_correction_enabled ? detected_target_yaw : 0.0;
+      const double raw_target_yaw = std::atan2(averaged_cart_frame->y, averaged_cart_frame->x);
+      const double target_yaw = yaw_correction_enabled ? raw_target_yaw * lateral_yaw_gain_ : 0.0;
       const double distance_to_center = std::hypot(averaged_cart_frame->x, averaged_cart_frame->y);
       const double lateral_error = std::abs(averaged_cart_frame->y);
       RCLCPP_INFO(get_logger(),
                   "Stepwise center step %d: cart_frame=(%.3f, %.3f), distance=%.3f m, "
-                  "lateral_error=%.3f m, detected_target_yaw=%.3f rad, target_yaw=%.3f rad, "
-                  "yaw_correction_enabled=%s, min_yaw_correction_distance=%.3f m, "
-                  "restore_yaw_after_correction=%s",
+                  "lateral_error=%.3f m, raw_target_yaw=%.3f rad, lateral_yaw_gain=%.3f, "
+                  "applied_target_yaw=%.3f rad, yaw_correction_enabled=%s, "
+                  "min_yaw_correction_distance=%.3f m, restore_yaw_after_correction=%s",
                   step, averaged_cart_frame->x, averaged_cart_frame->y, distance_to_center,
-                  lateral_error, detected_target_yaw, target_yaw,
+                  lateral_error, raw_target_yaw, lateral_yaw_gain_, target_yaw,
                   yaw_correction_enabled ? "true" : "false", min_yaw_correction_distance_,
                   restore_yaw_after_correction_ ? "true" : "false");
 
@@ -1006,6 +1009,7 @@ private:
   double center_drive_scale_;
   double center_extra_forward_distance_;
   int yaw_correction_steps_;
+  double lateral_yaw_gain_;
   double min_yaw_correction_distance_;
   bool restore_yaw_after_correction_;
   double forward_step_distance_;

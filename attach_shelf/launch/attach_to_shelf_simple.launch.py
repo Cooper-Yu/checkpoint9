@@ -34,6 +34,7 @@ def generate_launch_description():
     center_drive_scale = LaunchConfiguration("center_drive_scale")
     center_extra_forward_distance = LaunchConfiguration("center_extra_forward_distance")
     yaw_correction_steps = LaunchConfiguration("yaw_correction_steps")
+    service_lateral_yaw_gain = LaunchConfiguration("service_lateral_yaw_gain")
     min_yaw_correction_distance = LaunchConfiguration("min_yaw_correction_distance")
     restore_yaw_after_correction = LaunchConfiguration("restore_yaw_after_correction")
     forward_step_distance = LaunchConfiguration("forward_step_distance")
@@ -118,6 +119,7 @@ def generate_launch_description():
             DeclareLaunchArgument("center_drive_scale", default_value="1.5"),
             DeclareLaunchArgument("center_extra_forward_distance", default_value="0.0"),
             DeclareLaunchArgument("yaw_correction_steps", default_value="3"),
+            DeclareLaunchArgument("service_lateral_yaw_gain", default_value="0.4"),
             DeclareLaunchArgument("min_yaw_correction_distance", default_value="0.55"),
             DeclareLaunchArgument("restore_yaw_after_correction", default_value="false"),
             DeclareLaunchArgument("forward_step_distance", default_value="0.20"),
@@ -161,6 +163,7 @@ def generate_launch_description():
                             center_extra_forward_distance, value_type=float
                         ),
                         "yaw_correction_steps": ParameterValue(yaw_correction_steps, value_type=int),
+                        "lateral_yaw_gain": ParameterValue(service_lateral_yaw_gain, value_type=float),
                         "min_yaw_correction_distance": ParameterValue(
                             min_yaw_correction_distance, value_type=float
                         ),
