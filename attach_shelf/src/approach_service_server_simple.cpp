@@ -39,14 +39,14 @@ public:
         center_lock_distance_(0.35),
         center_lock_min_steps_(2),
         center_drive_scale_(1.5),
-        center_extra_forward_distance_(0.05),
+        center_extra_forward_distance_(0.0),
         yaw_correction_steps_(2),
         forward_step_distance_(0.20),
         cart_frame_retry_count_(6),
         movement_timeout_(30.0),
         conservative_offset_(0.0),
         final_drive_distance_(0.30),
-        enable_final_push_(false),
+        enable_final_push_(true),
         service_straight_test_(false),
         straight_sample_count_(5),
         straight_sample_max_spread_(0.15),
@@ -540,6 +540,10 @@ private:
     }
 
     if (enable_final_push_) {
+      RCLCPP_WARN(get_logger(),
+                  "Starting final shelf push: distance=%.3f m. Elevator will be raised after this "
+                  "drive completes.",
+                  final_drive_distance_);
       if (!drive_forward_open_loop(final_drive_distance_, "Final shelf push")) {
         return false;
       }
