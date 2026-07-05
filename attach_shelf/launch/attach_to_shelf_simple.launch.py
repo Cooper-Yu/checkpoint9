@@ -15,6 +15,10 @@ def generate_launch_description():
     forward_speed = LaunchConfiguration("forward_speed")
     angular_speed = LaunchConfiguration("angular_speed")
     rotation_scale = LaunchConfiguration("rotation_scale")
+    use_tf_rotation = LaunchConfiguration("use_tf_rotation")
+    rotation_tolerance = LaunchConfiguration("rotation_tolerance")
+    rotation_reference_frame = LaunchConfiguration("rotation_reference_frame")
+    rotation_base_frame = LaunchConfiguration("rotation_base_frame")
     service_forward_speed = LaunchConfiguration("service_forward_speed")
     service_rotate_speed = LaunchConfiguration("service_rotate_speed")
     conservative_offset = LaunchConfiguration("conservative_offset")
@@ -34,6 +38,10 @@ def generate_launch_description():
             "forward_speed": ParameterValue(forward_speed, value_type=float),
             "angular_speed": ParameterValue(angular_speed, value_type=float),
             "rotation_scale": ParameterValue(rotation_scale, value_type=float),
+            "use_tf_rotation": ParameterValue(use_tf_rotation, value_type=bool),
+            "rotation_tolerance": ParameterValue(rotation_tolerance, value_type=float),
+            "rotation_reference_frame": rotation_reference_frame,
+            "rotation_base_frame": rotation_base_frame,
         }
     ]
 
@@ -76,6 +84,10 @@ def generate_launch_description():
             DeclareLaunchArgument("forward_speed", default_value="0.4"),
             DeclareLaunchArgument("angular_speed", default_value="0.5"),
             DeclareLaunchArgument("rotation_scale", default_value="0.5"),
+            DeclareLaunchArgument("use_tf_rotation", default_value="false"),
+            DeclareLaunchArgument("rotation_tolerance", default_value="0.03"),
+            DeclareLaunchArgument("rotation_reference_frame", default_value="odom"),
+            DeclareLaunchArgument("rotation_base_frame", default_value="robot_base_footprint"),
             DeclareLaunchArgument("service_forward_speed", default_value="0.2"),
             DeclareLaunchArgument("service_rotate_speed", default_value="0.3"),
             DeclareLaunchArgument("conservative_offset", default_value="0.0"),

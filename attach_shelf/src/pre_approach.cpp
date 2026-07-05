@@ -7,6 +7,10 @@
 #include "geometry_msgs/msg/twist.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/laser_scan.hpp"
+#include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
+#include "tf2/utils.h"
+#include "tf2_ros/buffer.h"
+#include "tf2_ros/transform_listener.h"
 
 using namespace std::chrono_literals;
 
@@ -20,23 +24,38 @@ public:
         forward_speed_(0.4),
         angular_speed_(0.5),
         rotation_scale_(0.5),
+        use_tf_rotation_(false),
+        rotation_tolerance_(0.03),
+        rotation_reference_frame_("odom"),
+        rotation_base_frame_("robot_base_footprint"),
         rotate_time_(0.0),
+        target_yaw_(0.0),
         invalid_scan_count_(0),
         state_(State::WAITING_FOR_SCAN),
         last_logged_state_(State::WAITING_FOR_SCAN),
-        shutdown_requested_(false)
+        shutdown_requested_(false),
+        tf_buffer_(this->get_clock()),
+        tf_listener_(tf_buffer_)
   {
     declare_parameter<double>("obstacle", obstacle_);
     declare_parameter<double>("degrees", degrees_);
     declare_parameter<double>("forward_speed", forward_speed_);
     declare_parameter<double>("angular_speed", angular_speed_);
     declare_parameter<double>("rotation_scale", rotation_scale_);
+    declare_parameter<bool>("use_tf_rotation", use_tf_rotation_);
+    declare_parameter<double>("rotation_tolerance", rotation_tolerance_);
+    declare_parameter<std::string>("rotation_reference_frame", rotation_reference_frame_);
+    declare_parameter<std::string>("rotation_base_frame", rotation_base_frame_);
 
     obstacle_ = get_parameter("obstacle").as_double();
     degrees_ = get_parameter("degrees").as_double();
     forward_speed_ = get_parameter("forward_speed").as_double();
     angular_speed_ = get_parameter("angular_speed").as_double();
     rotation_scale_ = get_parameter("rotation_scale").as_double();
+    use_tf_rotation_ = get_parameter("use_tf_rotation").as_bool();
+    rotation_tolerance_ = get_parameter("rotation_tolerance").as_double();
+    rotation_reference_frame_ = get_parameter("rotation_reference_frame").as_string();
+    rotation_base_frame_ = get_parameter("rotation_base_frame").as_string();
 
     if (obstacle_ <= 0.0) {
       state_ = State::SAFE_STOP;
@@ -59,6 +78,11 @@ public:
       RCLCPP_ERROR(get_logger(), "Invalid rotation_scale parameter: %.3f", rotation_scale_);
     }
 
+    if (rotation_tolerance_ <= 0.0) {
+      state_ = State::SAFE_STOP;
+      RCLCPP_ERROR(get_logger(), "Invalid rotation_tolerance parameter: %.3f", rotation_tolerance_);
+    }
+
     // The rotation is open-loop: publish angular velocity for a calibrated duration.
     // rotation_scale compensates for the simulator's actual yaw response.
     const double target_angle_rad = degrees_ * kPi / 180.0;
@@ -78,8 +102,10 @@ public:
 
     RCLCPP_INFO(get_logger(),
                 "pre_approach started: obstacle=%.2f m, degrees=%.2f, forward_speed=%.2f m/s, "
-                "angular_speed=%.2f rad/s, rotation_scale=%.2f, rotate_time=%.2f s",
-                obstacle_, degrees_, forward_speed_, angular_speed_, rotation_scale_, rotate_time_);
+                "angular_speed=%.2f rad/s, rotation_scale=%.2f, rotate_time=%.2f s, "
+                "use_tf_rotation=%s",
+                obstacle_, degrees_, forward_speed_, angular_speed_, rotation_scale_, rotate_time_,
+                use_tf_rotation_ ? "true" : "false");
   }
 
 private:
@@ -211,12 +237,21 @@ private:
         }
 
         rotation_start_time_ = this->now();
+        if (use_tf_rotation_ && !start_tf_rotation()) {
+          enter_safe_stop("cannot start TF rotation");
+          return;
+        }
         set_state(State::ROTATING, "settling stop complete");
         return;
       }
 
       // ROTATING -> DONE after rotate_time_
       case State::ROTATING: {
+        if (use_tf_rotation_) {
+          rotate_with_tf_feedback();
+          return;
+        }
+
         // Continue publishing angular velocity; a single Twist message is not enough.
         double elapsed = (this->now() - rotation_start_time_).seconds();
         if (elapsed < rotate_time_) {
@@ -333,6 +368,80 @@ private:
     cmd_vel_pub_->publish(cmd);
   }
 
+  std::optional<double> current_yaw()
+  {
+    try {
+      const auto transform = tf_buffer_.lookupTransform(rotation_reference_frame_, rotation_base_frame_,
+                                                        tf2::TimePointZero);
+      return tf2::getYaw(transform.transform.rotation);
+    } catch (const tf2::TransformException & ex) {
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000, "TF yaw lookup failed: %s", ex.what());
+      return std::nullopt;
+    }
+  }
+
+  double normalize_angle(double angle) const
+  {
+    while (angle > kPi) {
+      angle -= 2.0 * kPi;
+    }
+    while (angle < -kPi) {
+      angle += 2.0 * kPi;
+    }
+    return angle;
+  }
+
+  bool start_tf_rotation()
+  {
+    auto yaw = current_yaw();
+    if (!yaw.has_value()) {
+      return false;
+    }
+
+    const double target_angle_rad = degrees_ * kPi / 180.0;
+    target_yaw_ = normalize_angle(yaw.value() + target_angle_rad);
+    RCLCPP_INFO(get_logger(),
+                "TF rotation started: current_yaw=%.3f rad, target_delta=%.3f rad, "
+                "target_yaw=%.3f rad, tolerance=%.3f rad",
+                yaw.value(), target_angle_rad, target_yaw_, rotation_tolerance_);
+    return true;
+  }
+
+  void rotate_with_tf_feedback()
+  {
+    const double elapsed = (now() - rotation_start_time_).seconds();
+    const double rotation_timeout = std::max(3.0, rotate_time_ * 3.0);
+    if (elapsed > rotation_timeout) {
+      enter_safe_stop("TF rotation timed out");
+      return;
+    }
+
+    auto yaw = current_yaw();
+    if (!yaw.has_value()) {
+      publish_stop();
+      return;
+    }
+
+    const double error = normalize_angle(target_yaw_ - yaw.value());
+    if (std::abs(error) <= rotation_tolerance_) {
+      publish_stop();
+      RCLCPP_INFO(get_logger(), "TF rotation complete: yaw=%.3f rad, target=%.3f rad, error=%.3f rad",
+                  yaw.value(), target_yaw_, error);
+      set_state(State::DONE, "TF rotation reached target yaw");
+      return;
+    }
+
+    geometry_msgs::msg::Twist cmd;
+    const double commanded_speed = std::min(std::abs(angular_speed_), std::max(0.08, std::abs(error)));
+    cmd.angular.z = error > 0.0 ? commanded_speed : -commanded_speed;
+    cmd_vel_pub_->publish(cmd);
+
+    RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 500,
+                         "TF rotating: yaw=%.3f rad, target=%.3f rad, error=%.3f rad, "
+                         "angular_z=%.3f rad/s",
+                         yaw.value(), target_yaw_, error, cmd.angular.z);
+  }
+
   void enter_safe_stop(const std::string & reason)
   {
     safety_stop_reason_ = reason;
@@ -361,7 +470,12 @@ private:
   double forward_speed_;
   double angular_speed_;
   double rotation_scale_;
+  bool use_tf_rotation_;
+  double rotation_tolerance_;
+  std::string rotation_reference_frame_;
+  std::string rotation_base_frame_;
   double rotate_time_;
+  double target_yaw_;
 
   std::optional<double> front_distance_;
   rclcpp::Time last_valid_scan_time_;
@@ -373,6 +487,8 @@ private:
   rclcpp::Time stop_start_time_;
   std::string safety_stop_reason_;
   bool shutdown_requested_;
+  tf2_ros::Buffer tf_buffer_;
+  tf2_ros::TransformListener tf_listener_;
 };
 
 int main(int argc, char ** argv)
