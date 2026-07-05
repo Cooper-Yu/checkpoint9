@@ -37,6 +37,8 @@ ament_target_dependencies(approach_service_server_simple
   geometry_msgs
   sensor_msgs
   std_msgs
+  tf2
+  tf2_geometry_msgs
   tf2_ros
 )
 

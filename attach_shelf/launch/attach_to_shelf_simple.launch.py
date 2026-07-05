@@ -36,6 +36,7 @@ def generate_launch_description():
     service_straight_test = LaunchConfiguration("service_straight_test")
     straight_sample_count = LaunchConfiguration("straight_sample_count")
     straight_sample_max_spread = LaunchConfiguration("straight_sample_max_spread")
+    target_base_frame = LaunchConfiguration("target_base_frame")
     use_rviz = LaunchConfiguration("use_rviz")
 
     rviz_config = [FindPackageShare("attach_shelf"), "/rviz/pre_approach.rviz"]
@@ -114,6 +115,7 @@ def generate_launch_description():
             DeclareLaunchArgument("service_straight_test", default_value="false"),
             DeclareLaunchArgument("straight_sample_count", default_value="5"),
             DeclareLaunchArgument("straight_sample_max_spread", default_value="0.15"),
+            DeclareLaunchArgument("target_base_frame", default_value="robot_base_link"),
             DeclareLaunchArgument("use_rviz", default_value="true"),
             Node(
                 package="rviz2",
@@ -151,6 +153,7 @@ def generate_launch_description():
                         "service_straight_test": ParameterValue(service_straight_test, value_type=bool),
                         "straight_sample_count": ParameterValue(straight_sample_count, value_type=int),
                         "straight_sample_max_spread": ParameterValue(straight_sample_max_spread, value_type=float),
+                        "target_base_frame": target_base_frame,
                     }
                 ],
                 condition=IfCondition(final_approach),

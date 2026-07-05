@@ -8,13 +8,17 @@
 #include <vector>
 
 #include "attach_shelf/srv/go_to_loading.hpp"
+#include "geometry_msgs/msg/point_stamped.hpp"
 #include "geometry_msgs/msg/transform_stamped.hpp"
 #include "geometry_msgs/msg/twist.hpp"
 #include "rclcpp/executors/multi_threaded_executor.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/laser_scan.hpp"
 #include "std_msgs/msg/string.hpp"
+#include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
+#include "tf2_ros/buffer.h"
 #include "tf2_ros/transform_broadcaster.h"
+#include "tf2_ros/transform_listener.h"
 
 using namespace std::chrono_literals;
 
@@ -45,7 +49,8 @@ public:
         enable_final_push_(false),
         service_straight_test_(false),
         straight_sample_count_(5),
-        straight_sample_max_spread_(0.15)
+        straight_sample_max_spread_(0.15),
+        target_base_frame_("robot_base_link")
   {
     declare_parameter<double>("rotate_speed", rotate_speed_);
     declare_parameter<double>("forward_speed", forward_speed_);
@@ -64,6 +69,7 @@ public:
     declare_parameter<bool>("service_straight_test", service_straight_test_);
     declare_parameter<int>("straight_sample_count", straight_sample_count_);
     declare_parameter<double>("straight_sample_max_spread", straight_sample_max_spread_);
+    declare_parameter<std::string>("target_base_frame", target_base_frame_);
 
     rotate_speed_ = get_parameter("rotate_speed").as_double();
     forward_speed_ = get_parameter("forward_speed").as_double();
@@ -82,6 +88,7 @@ public:
     service_straight_test_ = get_parameter("service_straight_test").as_bool();
     straight_sample_count_ = get_parameter("straight_sample_count").as_int();
     straight_sample_max_spread_ = get_parameter("straight_sample_max_spread").as_double();
+    target_base_frame_ = get_parameter("target_base_frame").as_string();
 
     scan_callback_group_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
     service_callback_group_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
@@ -101,6 +108,8 @@ public:
 
     cmd_vel_pub_ = create_publisher<geometry_msgs::msg::Twist>("/cmd_vel", 10);
     elevator_up_pub_ = create_publisher<std_msgs::msg::String>("/elevator_up", 10);
+    tf_buffer_ = std::make_unique<tf2_ros::Buffer>(get_clock());
+    tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
     tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
 
     approach_service_ = create_service<attach_shelf::srv::GoToLoading>(
@@ -109,7 +118,9 @@ public:
                   std::placeholders::_1, std::placeholders::_2),
         rmw_qos_profile_services_default, service_callback_group_);
 
-    RCLCPP_INFO(get_logger(), "approach_service_server_simple ready on /approach_shelf");
+    RCLCPP_INFO(get_logger(),
+                "approach_service_server_simple ready on /approach_shelf; target_base_frame=%s",
+                target_base_frame_.c_str());
   }
 
 private:
@@ -118,6 +129,9 @@ private:
     double x;
     double y;
     std::string frame_id;
+    double laser_x;
+    double laser_y;
+    std::string laser_frame_id;
   };
 
   struct LegCandidate
@@ -154,8 +168,10 @@ private:
     }
 
     publish_cart_frame(cart_frame.value());
-    RCLCPP_INFO(get_logger(), "Published one-shot cart_frame TF in frame '%s'",
-                cart_frame->frame_id.c_str());
+    RCLCPP_INFO(get_logger(),
+                "Published one-shot cart_frame TF in frame '%s'; original laser[%s]=(%.3f, %.3f)",
+                cart_frame->frame_id.c_str(), cart_frame->laser_frame_id.c_str(),
+                cart_frame->laser_x, cart_frame->laser_y);
 
     if (!request->attach_to_shelf) {
       response->complete = true;
@@ -309,18 +325,61 @@ private:
     auto leg_1 = best_pair->first;
     auto leg_2 = best_pair->second;
     choose_inner_edge_pair(scan, leg_1, leg_2);
-    const double x = (leg_1.x + leg_2.x) / 2.0;
-    const double y = (leg_1.y + leg_2.y) / 2.0;
+    const double laser_x = (leg_1.x + leg_2.x) / 2.0;
+    const double laser_y = (leg_1.y + leg_2.y) / 2.0;
     const double leg_separation = std::abs(leg_1.y - leg_2.y);
     const double x_difference = std::abs(leg_1.x - leg_2.x);
 
     RCLCPP_INFO(get_logger(),
-                "One-shot cart_frame: x=%.3f, y=%.3f, leg1=(%.3f, %.3f), leg2=(%.3f, %.3f), "
+                "One-shot cart_frame in laser frame '%s': x=%.3f, y=%.3f, "
+                "leg1=(%.3f, %.3f), leg2=(%.3f, %.3f), "
                 "separation=%.3f, x_difference=%.3f, front_candidates=%zu",
-                x, y, leg_1.x, leg_1.y, leg_2.x, leg_2.y, leg_separation, x_difference,
-                candidates.size());
+                scan.header.frame_id.c_str(), laser_x, laser_y, leg_1.x, leg_1.y, leg_2.x, leg_2.y,
+                leg_separation, x_difference, candidates.size());
 
-    return CartFrame{x, y, scan.header.frame_id};
+    return make_cart_frame_in_target_base(laser_x, laser_y, scan.header.frame_id);
+  }
+
+  std::optional<CartFrame> make_cart_frame_in_target_base(double laser_x, double laser_y,
+                                                          const std::string & laser_frame_id)
+  {
+    if (target_base_frame_.empty() || target_base_frame_ == laser_frame_id) {
+      RCLCPP_WARN(get_logger(),
+                  "Using laser-frame cart target directly because target_base_frame='%s' and "
+                  "laser_frame='%s'",
+                  target_base_frame_.c_str(), laser_frame_id.c_str());
+      return CartFrame{laser_x, laser_y, laser_frame_id, laser_x, laser_y, laser_frame_id};
+    }
+
+    geometry_msgs::msg::PointStamped laser_point;
+    laser_point.header.stamp = rclcpp::Time(0);
+    laser_point.header.frame_id = laser_frame_id;
+    laser_point.point.x = laser_x;
+    laser_point.point.y = laser_y;
+    laser_point.point.z = 0.0;
+
+    try {
+      const auto transform = tf_buffer_->lookupTransform(target_base_frame_, laser_frame_id,
+                                                         tf2::TimePointZero, 200ms);
+      geometry_msgs::msg::PointStamped base_point;
+      tf2::doTransform(laser_point, base_point, transform);
+
+      RCLCPP_INFO(get_logger(),
+                  "Transformed cart_frame target: laser[%s]=(%.3f, %.3f) -> base[%s]=(%.3f, %.3f); "
+                  "laser_origin_in_base=(%.3f, %.3f)",
+                  laser_frame_id.c_str(), laser_x, laser_y, target_base_frame_.c_str(),
+                  base_point.point.x, base_point.point.y, transform.transform.translation.x,
+                  transform.transform.translation.y);
+
+      return CartFrame{base_point.point.x, base_point.point.y, target_base_frame_, laser_x, laser_y,
+                       laser_frame_id};
+    } catch (const tf2::TransformException & ex) {
+      RCLCPP_WARN(
+          get_logger(),
+          "Cannot transform cart target from laser frame '%s' to target_base_frame '%s': %s",
+          laser_frame_id.c_str(), target_base_frame_.c_str(), ex.what());
+      return std::nullopt;
+    }
   }
 
   void log_reflective_candidates(const std::vector<LegCandidate> & candidates, size_t cluster_count,
@@ -519,11 +578,14 @@ private:
         std::hypot(verification_cart_frame->x, verification_cart_frame->y);
     const double remaining_yaw = std::atan2(verification_cart_frame->y, verification_cart_frame->x);
     RCLCPP_WARN(get_logger(),
-                "Final center verification only (%s): detected cart_frame=(%.3f, %.3f), "
-                "remaining_distance=%.3f m, lateral_error=%.3f m, remaining_yaw=%.3f rad. "
-                "No extra motion command was sent.",
-                label.c_str(), verification_cart_frame->x, verification_cart_frame->y,
-                remaining_distance, std::abs(verification_cart_frame->y), remaining_yaw);
+                "Final center verification only (%s): detected cart_frame[%s]=(%.3f, %.3f), "
+                "laser[%s]=(%.3f, %.3f), remaining_distance=%.3f m, lateral_error=%.3f m, "
+                "remaining_yaw=%.3f rad. No extra motion command was sent.",
+                label.c_str(), verification_cart_frame->frame_id.c_str(),
+                verification_cart_frame->x, verification_cart_frame->y,
+                verification_cart_frame->laser_frame_id.c_str(), verification_cart_frame->laser_x,
+                verification_cart_frame->laser_y, remaining_distance,
+                std::abs(verification_cart_frame->y), remaining_yaw);
   }
 
   bool perform_straight_test_final_approach(const CartFrame & cart_frame)
@@ -622,8 +684,12 @@ private:
       }
 
       samples.push_back(cart_frame.value());
-      RCLCPP_INFO(get_logger(), "Straight service sample %d/%d: cart_frame=(%.3f, %.3f)", i + 1,
-                  straight_sample_count_, cart_frame->x, cart_frame->y);
+      RCLCPP_INFO(get_logger(),
+                  "Straight service sample %d/%d: cart_frame[%s]=(%.3f, %.3f), "
+                  "laser[%s]=(%.3f, %.3f)",
+                  i + 1, straight_sample_count_, cart_frame->frame_id.c_str(), cart_frame->x,
+                  cart_frame->y, cart_frame->laser_frame_id.c_str(), cart_frame->laser_x,
+                  cart_frame->laser_y);
     }
 
     double min_x = samples.front().x;
@@ -632,6 +698,8 @@ private:
     double max_y = samples.front().y;
     double sum_x = 0.0;
     double sum_y = 0.0;
+    double sum_laser_x = 0.0;
+    double sum_laser_y = 0.0;
 
     for (const auto & sample : samples) {
       min_x = std::min(min_x, sample.x);
@@ -640,17 +708,23 @@ private:
       max_y = std::max(max_y, sample.y);
       sum_x += sample.x;
       sum_y += sample.y;
+      sum_laser_x += sample.laser_x;
+      sum_laser_y += sample.laser_y;
     }
 
     const double x_spread = max_x - min_x;
     const double y_spread = max_y - min_y;
     const double average_x = sum_x / static_cast<double>(samples.size());
     const double average_y = sum_y / static_cast<double>(samples.size());
+    const double average_laser_x = sum_laser_x / static_cast<double>(samples.size());
+    const double average_laser_y = sum_laser_y / static_cast<double>(samples.size());
 
     RCLCPP_INFO(get_logger(),
-                "Straight service sample summary: count=%zu, average=(%.3f, %.3f), "
-                "x_spread=%.3f, y_spread=%.3f",
-                samples.size(), average_x, average_y, x_spread, y_spread);
+                "Straight service sample summary: count=%zu, average[%s]=(%.3f, %.3f), "
+                "average_laser[%s]=(%.3f, %.3f), x_spread=%.3f, y_spread=%.3f",
+                samples.size(), first_cart_frame.frame_id.c_str(), average_x, average_y,
+                first_cart_frame.laser_frame_id.c_str(), average_laser_x, average_laser_y, x_spread,
+                y_spread);
 
     if (x_spread > straight_sample_max_spread_ || y_spread > straight_sample_max_spread_) {
       RCLCPP_WARN(get_logger(),
@@ -660,7 +734,8 @@ private:
       return std::nullopt;
     }
 
-    return CartFrame{average_x, average_y, first_cart_frame.frame_id};
+    return CartFrame{average_x,       average_y,       first_cart_frame.frame_id,
+                     average_laser_x, average_laser_y, first_cart_frame.laser_frame_id};
   }
 
   std::optional<CartFrame> recover_cart_frame_after_motion(const CartFrame & previous,
@@ -735,9 +810,11 @@ private:
     const double remaining_distance = std::hypot(cart_frame->x, cart_frame->y);
     const double remaining_yaw = std::atan2(cart_frame->y, cart_frame->x);
     RCLCPP_INFO(get_logger(),
-                "Cart-frame diagnostic %s: remaining cart_frame=(%.3f, %.3f), "
-                "remaining_distance=%.3f m, remaining_yaw=%.3f rad",
-                label.c_str(), cart_frame->x, cart_frame->y, remaining_distance, remaining_yaw);
+                "Cart-frame diagnostic %s: remaining cart_frame[%s]=(%.3f, %.3f), "
+                "laser[%s]=(%.3f, %.3f), remaining_distance=%.3f m, remaining_yaw=%.3f rad",
+                label.c_str(), cart_frame->frame_id.c_str(), cart_frame->x, cart_frame->y,
+                cart_frame->laser_frame_id.c_str(), cart_frame->laser_x, cart_frame->laser_y,
+                remaining_distance, remaining_yaw);
   }
 
   bool rotate_by_yaw_open_loop(double target_yaw, const std::string & label)
@@ -845,6 +922,8 @@ private:
   rclcpp::Service<attach_shelf::srv::GoToLoading>::SharedPtr approach_service_;
   rclcpp::CallbackGroup::SharedPtr scan_callback_group_;
   rclcpp::CallbackGroup::SharedPtr service_callback_group_;
+  std::unique_ptr<tf2_ros::Buffer> tf_buffer_;
+  std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
   std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
 
   std::optional<sensor_msgs::msg::LaserScan> latest_scan_;
@@ -872,6 +951,7 @@ private:
   bool service_straight_test_;
   int straight_sample_count_;
   double straight_sample_max_spread_;
+  std::string target_base_frame_;
 
   static constexpr double kPi = 3.14159265358979323846;
 };
