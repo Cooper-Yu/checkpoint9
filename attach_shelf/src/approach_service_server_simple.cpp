@@ -43,7 +43,7 @@ public:
         yaw_correction_steps_(2),
         forward_step_distance_(0.20),
         cart_frame_retry_count_(6),
-        movement_timeout_(30.0),
+        movement_timeout_(45.0),
         conservative_offset_(0.0),
         final_drive_distance_(0.30),
         enable_final_push_(true),
@@ -439,6 +439,7 @@ private:
     const auto start_time = now();
     auto averaged_cart_frame = sample_average_cart_frame(initial_cart_frame);
     int step = 0;
+    bool center_approach_complete = false;
 
     RCLCPP_INFO(get_logger(),
                 "Stepwise final approach started: center_tolerance=%.3f m, "
@@ -478,6 +479,7 @@ private:
                     "Reached cart center tolerance: x=%.3f <= %.3f and abs(y)=%.3f <= %.3f",
                     averaged_cart_frame->x, center_distance_tolerance_, lateral_error,
                     center_lateral_tolerance_);
+        center_approach_complete = true;
         break;
       }
 
@@ -497,6 +499,7 @@ private:
         }
         RCLCPP_INFO(get_logger(),
                     "Locked center approach complete; robot stopped at detected center");
+        center_approach_complete = true;
         break;
       }
 
@@ -519,9 +522,14 @@ private:
       ++step;
     }
 
-    if ((now() - start_time).seconds() >= movement_timeout_) {
+    if (!center_approach_complete && (now() - start_time).seconds() >= movement_timeout_) {
       RCLCPP_WARN(get_logger(), "Stepwise final approach timed out after %.3f seconds",
                   movement_timeout_);
+      return false;
+    }
+
+    if (!center_approach_complete) {
+      RCLCPP_WARN(get_logger(), "Stepwise final approach stopped before reaching cart center");
       return false;
     }
 

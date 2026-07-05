@@ -111,7 +111,7 @@ def generate_launch_description():
             DeclareLaunchArgument("center_extra_forward_distance", default_value="0.0"),
             DeclareLaunchArgument("yaw_correction_steps", default_value="2"),
             DeclareLaunchArgument("forward_step_distance", default_value="0.20"),
-            DeclareLaunchArgument("movement_timeout", default_value="30.0"),
+            DeclareLaunchArgument("movement_timeout", default_value="45.0"),
             DeclareLaunchArgument("service_straight_test", default_value="false"),
             DeclareLaunchArgument("straight_sample_count", default_value="5"),
             DeclareLaunchArgument("straight_sample_max_spread", default_value="0.15"),
