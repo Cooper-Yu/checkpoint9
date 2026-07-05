@@ -31,7 +31,6 @@ public:
         forward_speed_(0.2),
         yaw_tolerance_(0.05),
         center_distance_tolerance_(0.20),
-        max_step_yaw_(0.25),
         forward_step_distance_(0.20),
         max_centering_steps_(8),
         movement_timeout_(12.0),
@@ -43,7 +42,6 @@ public:
     declare_parameter<double>("conservative_offset", conservative_offset_);
     declare_parameter<double>("final_drive_distance", final_drive_distance_);
     declare_parameter<double>("center_distance_tolerance", center_distance_tolerance_);
-    declare_parameter<double>("max_step_yaw", max_step_yaw_);
     declare_parameter<double>("forward_step_distance", forward_step_distance_);
 
     rotate_speed_ = get_parameter("rotate_speed").as_double();
@@ -51,7 +49,6 @@ public:
     conservative_offset_ = get_parameter("conservative_offset").as_double();
     final_drive_distance_ = get_parameter("final_drive_distance").as_double();
     center_distance_tolerance_ = get_parameter("center_distance_tolerance").as_double();
-    max_step_yaw_ = get_parameter("max_step_yaw").as_double();
     forward_step_distance_ = get_parameter("forward_step_distance").as_double();
 
     scan_callback_group_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
@@ -307,10 +304,10 @@ private:
     double accumulated_yaw = 0.0;
 
     RCLCPP_INFO(get_logger(),
-                "Stepwise final approach started: center_tolerance=%.3f m, max_step_yaw=%.3f rad, "
+                "Stepwise final approach started: center_tolerance=%.3f m, "
                 "forward_step=%.3f m, max_steps=%d, final_push=%.3f m",
-                center_distance_tolerance_, max_step_yaw_, forward_step_distance_,
-                max_centering_steps_, final_drive_distance_);
+                center_distance_tolerance_, forward_step_distance_, max_centering_steps_,
+                final_drive_distance_);
 
     for (int step = 0; step < max_centering_steps_; ++step) {
       const double target_yaw = std::atan2(cart_frame.y, cart_frame.x);
@@ -327,11 +324,10 @@ private:
         break;
       }
 
-      const double yaw_correction = std::clamp(target_yaw, -max_step_yaw_, max_step_yaw_);
-      if (!rotate_by_yaw_open_loop(yaw_correction, "Stepwise yaw correction")) {
+      if (!rotate_by_yaw_open_loop(target_yaw, "Stepwise yaw correction")) {
         return false;
       }
-      accumulated_yaw += yaw_correction;
+      accumulated_yaw += target_yaw;
 
       const double drive_distance =
           std::min(forward_step_distance_, std::max(distance_to_center - conservative_offset_, 0.0));
@@ -509,7 +505,6 @@ private:
   double forward_speed_;
   double yaw_tolerance_;
   double center_distance_tolerance_;
-  double max_step_yaw_;
   double forward_step_distance_;
   int max_centering_steps_;
   double movement_timeout_;
