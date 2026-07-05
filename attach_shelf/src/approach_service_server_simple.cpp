@@ -27,7 +27,6 @@ public:
         min_cluster_size_(2),
         max_x_difference_(0.75),
         min_leg_separation_(0.25),
-        max_midpoint_y_(0.55),
         rotate_speed_(0.3),
         forward_speed_(0.2),
         yaw_tolerance_(0.05),
@@ -237,9 +236,8 @@ private:
         const double leg_separation = std::abs(a.y - b.y);
         const double x_difference = std::abs(a.x - b.x);
         const double midpoint_y = (a.y + b.y) / 2.0;
-        const bool accepted = leg_separation >= min_leg_separation_ &&
-                              x_difference <= max_x_difference_ &&
-                              std::abs(midpoint_y) <= max_midpoint_y_;
+        const bool accepted =
+            leg_separation >= min_leg_separation_ && x_difference <= max_x_difference_;
         largest_rejected_midpoint_y =
             std::max(largest_rejected_midpoint_y, std::abs(midpoint_y));
 
@@ -263,8 +261,8 @@ private:
     if (!best_pair.has_value()) {
       RCLCPP_WARN(get_logger(),
                   "Cannot detect cart_frame: %zu candidates but no valid centered leg pair "
-                  "(max_seen_midpoint_y=%.3f, max_midpoint_y=%.3f)",
-                  candidates.size(), largest_rejected_midpoint_y, max_midpoint_y_);
+                  "(max_seen_midpoint_y=%.3f)",
+                  candidates.size(), largest_rejected_midpoint_y);
       return std::nullopt;
     }
 
@@ -507,7 +505,6 @@ private:
   int min_cluster_size_;
   double max_x_difference_;
   double min_leg_separation_;
-  double max_midpoint_y_;
   double rotate_speed_;
   double forward_speed_;
   double yaw_tolerance_;
