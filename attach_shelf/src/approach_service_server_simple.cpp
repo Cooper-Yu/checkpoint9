@@ -414,6 +414,15 @@ private:
                     "Straight service reached detected cart center: remaining_distance=%.3f m, "
                     "remaining_x=%.3f m",
                     remaining_distance, averaged_cart_frame->x);
+        const double center_trim_distance = std::max(averaged_cart_frame->x - conservative_offset_, 0.0);
+        if (center_trim_distance > 0.02) {
+          RCLCPP_INFO(get_logger(),
+                      "Straight service trimming remaining center distance before final push: %.3f m",
+                      center_trim_distance);
+          if (!drive_forward_open_loop(center_trim_distance, "Straight test final center trim")) {
+            return false;
+          }
+        }
         break;
       }
 
