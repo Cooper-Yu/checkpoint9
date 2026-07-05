@@ -9,6 +9,9 @@ from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
+    # One launch file supports both checkpoint modes:
+    # final_approach=false runs the Task 1 pre-approach node only.
+    # final_approach=true starts the service server and the Task 2 client node.
     obstacle = LaunchConfiguration("obstacle")
     degrees = LaunchConfiguration("degrees")
     final_approach = LaunchConfiguration("final_approach")
@@ -146,6 +149,8 @@ def generate_launch_description():
                 executable="approach_service_server",
                 name="approach_service_server",
                 output="screen",
+                # The service owns /cmd_vel only when the final approach is requested.
+                # This avoids two nodes publishing motion commands during Task 1-only runs.
                 parameters=[
                     {
                         "forward_speed": ParameterValue(service_forward_speed, value_type=float),

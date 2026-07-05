@@ -1,5 +1,9 @@
 # Request
+# false: only detect the shelf legs and publish cart_frame.
+# true: detect cart_frame, drive under the shelf, then publish /elevator_up.
 bool attach_to_shelf
 ---
 # Response
+# true means the requested operation completed successfully.
+# false means detection, movement, or safety validation failed.
 bool complete

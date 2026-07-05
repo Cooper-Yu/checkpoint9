@@ -145,6 +145,8 @@ public:
   }
 
 private:
+  // cart_frame keeps both the target expressed in the robot/base frame and the
+  // original laser-frame point so logs can explain frame-related differences.
   struct CartFrame
   {
     double x;
@@ -196,6 +198,7 @@ private:
                 cart_frame->laser_x, cart_frame->laser_y);
 
     if (!request->attach_to_shelf) {
+      // Detection-only requests are successful once the shelf center TF exists.
       response->complete = true;
       RCLCPP_INFO(get_logger(), "/approach_shelf response complete=true: detection-only request");
       return;
@@ -253,6 +256,9 @@ private:
     size_t high_intensity_ray_count = 0;
     float max_intensity = 0.0F;
 
+    // Reflective shelf legs appear as adjacent high-intensity scan rays.
+    // Grouping adjacent rays prevents a single physical leg from being counted
+    // as several independent candidates.
     for (size_t i = 0; i < n; ++i) {
       const float intensity = scan.intensities[i];
       const float range = scan.ranges[i];
@@ -308,6 +314,8 @@ private:
     std::optional<std::pair<LegCandidate, LegCandidate>> best_pair;
     double best_score = std::numeric_limits<double>::max();
     double largest_rejected_midpoint_y = 0.0;
+    // Prefer a pair that looks like two shelf legs: separated laterally, similar
+    // depth, and centered relative to the robot.
     for (size_t i = 0; i < candidates.size(); ++i) {
       for (size_t j = i + 1; j < candidates.size(); ++j) {
         const auto & a = candidates[i];
@@ -381,6 +389,9 @@ private:
     laser_point.point.z = 0.0;
 
     try {
+      // The laser is mounted ahead of the robot base. Transforming the detected
+      // midpoint into robot_base_link makes the final drive distance match the
+      // robot body rather than the laser origin.
       const auto transform = tf_buffer_->lookupTransform(target_base_frame_, laser_frame_id,
                                                          tf2::TimePointZero, 200ms);
       geometry_msgs::msg::PointStamped base_point;
@@ -514,6 +525,8 @@ private:
       }
 
       if (step >= center_lock_min_steps_ && averaged_cart_frame->x <= center_lock_distance_) {
+        // Close to the shelf, reflective clusters can jump between leg edges.
+        // Lock the remaining approach instead of chasing unstable late readings.
         const double raw_locked_drive_distance =
             std::max(averaged_cart_frame->x - conservative_offset_, 0.0);
         const double locked_drive_distance = raw_locked_drive_distance * center_drive_scale_;
@@ -766,6 +779,8 @@ private:
 
       auto last_scan_sequence = scan_sequence_.load();
       for (int i = 1; i < straight_sample_count_; ++i) {
+        // Wait for the next /scan callback so the average uses distinct sensor
+        // frames instead of repeatedly reading the same cached LaserScan.
         auto cart_frame = wait_for_next_cart_frame(last_scan_sequence, 0.5);
         if (!cart_frame.has_value()) {
           RCLCPP_WARN(get_logger(),

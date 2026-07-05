@@ -117,6 +117,8 @@ public:
   }
 
 private:
+  // Task 2 uses the same staged pre-approach as Task 1, then hands control to
+  // /approach_shelf only after the robot has stopped and rotated.
   enum class State
   {
     WAITING_FOR_SCAN,
@@ -472,6 +474,8 @@ private:
     service_request_time_ = now();
     publish_stop();
 
+    // The service server is launched only for final_approach=true, so the
+    // client waits here instead of assuming the service is already available.
     if (!approach_client_->wait_for_service(3s)) {
       enter_safe_stop("/approach_shelf is not available");
       request_shutdown("pre_approach_v2 stopped safely");
