@@ -32,7 +32,7 @@ public:
         yaw_tolerance_(0.05),
         center_distance_tolerance_(0.20),
         forward_step_distance_(0.20),
-        max_cart_frame_y_jump_(0.35),
+        cart_frame_retry_count_(6),
         movement_timeout_(30.0),
         conservative_offset_(0.0),
         final_drive_distance_(0.30)
@@ -43,7 +43,6 @@ public:
     declare_parameter<double>("final_drive_distance", final_drive_distance_);
     declare_parameter<double>("center_distance_tolerance", center_distance_tolerance_);
     declare_parameter<double>("forward_step_distance", forward_step_distance_);
-    declare_parameter<double>("max_cart_frame_y_jump", max_cart_frame_y_jump_);
     declare_parameter<double>("movement_timeout", movement_timeout_);
 
     rotate_speed_ = get_parameter("rotate_speed").as_double();
@@ -52,7 +51,6 @@ public:
     final_drive_distance_ = get_parameter("final_drive_distance").as_double();
     center_distance_tolerance_ = get_parameter("center_distance_tolerance").as_double();
     forward_step_distance_ = get_parameter("forward_step_distance").as_double();
-    max_cart_frame_y_jump_ = get_parameter("max_cart_frame_y_jump").as_double();
     movement_timeout_ = get_parameter("movement_timeout").as_double();
 
     scan_callback_group_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
@@ -344,14 +342,13 @@ private:
                     "Stepwise final approach failed: cannot detect cart_frame after step %d", step);
         return false;
       }
-      if (!cart_frame_is_continuous(cart_frame, updated_cart_frame.value())) {
-        RCLCPP_WARN(get_logger(),
-                    "Stepwise final approach failed: cart_frame jumped from (%.3f, %.3f) to "
-                    "(%.3f, %.3f)",
-                    cart_frame.x, cart_frame.y, updated_cart_frame->x, updated_cart_frame->y);
+      auto recovered_cart_frame =
+          recover_cart_frame_after_motion(cart_frame, updated_cart_frame.value(), drive_distance);
+      if (!recovered_cart_frame.has_value()) {
+        RCLCPP_WARN(get_logger(), "Stepwise final approach failed: cart_frame stayed unstable");
         return false;
       }
-      cart_frame = updated_cart_frame.value();
+      cart_frame = recovered_cart_frame.value();
       ++step;
     }
 
@@ -371,18 +368,57 @@ private:
     return true;
   }
 
-  bool cart_frame_is_continuous(const CartFrame & previous, const CartFrame & current)
+  std::optional<CartFrame> recover_cart_frame_after_motion(const CartFrame & previous,
+                                                           const CartFrame & first_detection,
+                                                           double drive_distance)
   {
-    const double y_jump = std::abs(current.y - previous.y);
-    if (y_jump > max_cart_frame_y_jump_) {
-      RCLCPP_WARN(get_logger(),
-                  "Rejecting cart_frame jump: previous_y=%.3f, current_y=%.3f, y_jump=%.3f, "
-                  "max_y_jump=%.3f",
-                  previous.y, current.y, y_jump, max_cart_frame_y_jump_);
-      return false;
+    if (cart_frame_progress_is_plausible(previous, first_detection, drive_distance)) {
+      return first_detection;
     }
 
-    return true;
+    publish_stop();
+    RCLCPP_WARN(get_logger(),
+                "Suspicious cart_frame update after motion; stopping and re-detecting before "
+                "continuing. previous=(%.3f, %.3f), first_detection=(%.3f, %.3f)",
+                previous.x, previous.y, first_detection.x, first_detection.y);
+
+    for (int retry = 1; retry <= cart_frame_retry_count_; ++retry) {
+      rclcpp::sleep_for(300ms);
+      auto retry_cart_frame = wait_for_cart_frame(0.5);
+      if (!retry_cart_frame.has_value()) {
+        RCLCPP_WARN(get_logger(), "cart_frame recovery retry %d/%d: detection failed", retry,
+                    cart_frame_retry_count_);
+        continue;
+      }
+
+      if (cart_frame_progress_is_plausible(previous, retry_cart_frame.value(), drive_distance)) {
+        RCLCPP_INFO(get_logger(),
+                    "cart_frame recovery retry %d/%d accepted: recovered=(%.3f, %.3f)",
+                    retry, cart_frame_retry_count_, retry_cart_frame->x, retry_cart_frame->y);
+        return retry_cart_frame;
+      }
+
+      RCLCPP_WARN(get_logger(),
+                  "cart_frame recovery retry %d/%d still suspicious: recovered=(%.3f, %.3f)",
+                  retry, cart_frame_retry_count_, retry_cart_frame->x, retry_cart_frame->y);
+    }
+
+    return std::nullopt;
+  }
+
+  bool cart_frame_progress_is_plausible(const CartFrame & previous, const CartFrame & current,
+                                        double drive_distance)
+  {
+    const double previous_distance = std::hypot(previous.x, previous.y);
+    const double current_distance = std::hypot(current.x, current.y);
+    const bool moved_closer = current_distance < previous_distance;
+
+    RCLCPP_INFO(get_logger(),
+                "cart_frame progress check: previous_distance=%.3f, current_distance=%.3f, "
+                "drive_distance=%.3f, moved_closer=%s",
+                previous_distance, current_distance, drive_distance, moved_closer ? "true" : "false");
+
+    return moved_closer;
   }
 
   void log_cart_frame_diagnostic(const std::string & label)
@@ -520,7 +556,7 @@ private:
   double yaw_tolerance_;
   double center_distance_tolerance_;
   double forward_step_distance_;
-  double max_cart_frame_y_jump_;
+  int cart_frame_retry_count_;
   double movement_timeout_;
   double conservative_offset_;
   double final_drive_distance_;
