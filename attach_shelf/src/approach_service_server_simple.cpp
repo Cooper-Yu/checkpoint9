@@ -560,7 +560,29 @@ private:
       }
 
       log_cart_frame_diagnostic("after stepwise center drive");
-      averaged_cart_frame = sample_average_cart_frame_after_motion(!smooth_forward);
+      auto next_cart_frame = sample_average_cart_frame_after_motion(!smooth_forward);
+      if (!next_cart_frame.has_value() && smooth_forward && step >= center_lock_min_steps_) {
+        const double estimated_remaining_x =
+            std::max(averaged_cart_frame->x - drive_distance - conservative_offset_, 0.0);
+        const double locked_drive_distance = estimated_remaining_x * center_drive_scale_;
+        RCLCPP_WARN(get_logger(),
+                    "Smooth re-detection failed close to cart center; locking from estimated "
+                    "remaining distance. previous_x=%.3f m, last_drive=%.3f m, "
+                    "estimated_remaining_x=%.3f m, center_drive_scale=%.3f, "
+                    "locked_drive_distance=%.3f m",
+                    averaged_cart_frame->x, drive_distance, estimated_remaining_x,
+                    center_drive_scale_, locked_drive_distance);
+        if (!drive_forward_open_loop(locked_drive_distance,
+                                     "Fallback locked drive to cart center after smooth detection loss")) {
+          return false;
+        }
+        RCLCPP_INFO(get_logger(),
+                    "Fallback locked center approach complete after smooth detection loss");
+        center_approach_complete = true;
+        break;
+      }
+
+      averaged_cart_frame = next_cart_frame;
       ++step;
     }
 
