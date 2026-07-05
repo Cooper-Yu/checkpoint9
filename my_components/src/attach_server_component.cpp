@@ -26,6 +26,9 @@ using namespace std::chrono_literals;
 namespace my_components
 {
 
+// Composable service server for the final shelf approach. The detection and
+// drive strategy is carried over from Checkpoint 9, while the node is registered
+// as a component for the Checkpoint 10 container workflow.
 class AttachServer : public rclcpp::Node
 {
 public:

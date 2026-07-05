@@ -9,6 +9,9 @@ using namespace std::chrono_literals;
 namespace my_components
 {
 
+// Runtime-loaded client component. Loading this node is the explicit Task 2
+// trigger: it calls /approach_shelf once and then lets the container exit after
+// the response is received.
 class AttachClient : public rclcpp::Node
 {
 public:

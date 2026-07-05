@@ -17,6 +17,9 @@ using namespace std::chrono_literals;
 namespace my_components
 {
 
+// Component version of the Checkpoint 9 pre-approach node. It keeps the same
+// staged motion behavior, but exposes the class through rclcpp_components so it
+// can be loaded into /ComponentManager or my_container.
 class PreApproach : public rclcpp::Node
 {
 public:
@@ -461,6 +464,8 @@ private:
 
     shutdown_requested_ = true;
     RCLCPP_INFO(get_logger(), "%s", reason.c_str());
+    // In a composable container, shutting down rclcpp would also stop the
+    // AttachServer. Cancel only this component's timer so Task 2 can continue.
     control_timer_->cancel();
   }
 

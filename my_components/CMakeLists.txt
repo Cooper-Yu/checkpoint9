@@ -16,6 +16,10 @@ find_package(tf2 REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(tf2_ros REQUIRED)
 
+# Each node is built as a shared library and registered with rclcpp_components.
+# This keeps the package aligned with the checkpoint commands, where components
+# are loaded dynamically into a running container instead of launched as
+# standalone executables.
 add_library(pre_approach_component SHARED src/pre_approach_component.cpp)
 ament_target_dependencies(pre_approach_component
   rclcpp
@@ -28,6 +32,8 @@ ament_target_dependencies(pre_approach_component
 )
 rclcpp_components_register_nodes(pre_approach_component "my_components::PreApproach")
 
+# The server reuses the Checkpoint 9 service interface from attach_shelf so the
+# component package remains focused on composition rather than duplicating IDL.
 add_library(attach_server_component SHARED src/attach_server_component.cpp)
 ament_target_dependencies(attach_server_component
   attach_shelf
@@ -42,6 +48,8 @@ ament_target_dependencies(attach_server_component
 )
 rclcpp_components_register_nodes(attach_server_component "my_components::AttachServer")
 
+# The client is intentionally a component too: loading it at runtime is the
+# trigger for the final shelf approach in Task 2.
 add_library(attach_client_component SHARED src/attach_client_component.cpp)
 ament_target_dependencies(attach_client_component
   attach_shelf
