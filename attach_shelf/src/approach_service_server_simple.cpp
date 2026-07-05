@@ -389,24 +389,47 @@ private:
 
   bool perform_straight_test_final_approach(const CartFrame & cart_frame)
   {
+    const auto start_time = now();
     auto averaged_cart_frame = sample_average_cart_frame(cart_frame);
-    if (!averaged_cart_frame.has_value()) {
-      RCLCPP_WARN(get_logger(), "Straight test failed: cart_frame samples were not stable");
-      return false;
+
+    while (rclcpp::ok() && (now() - start_time).seconds() < movement_timeout_) {
+      if (!averaged_cart_frame.has_value()) {
+        RCLCPP_WARN(get_logger(), "Straight test failed: cart_frame samples were not stable");
+        return false;
+      }
+
+      const double remaining_distance = std::hypot(averaged_cart_frame->x, averaged_cart_frame->y);
+      const double straight_distance = std::min(
+          forward_step_distance_, std::max(averaged_cart_frame->x - conservative_offset_, 0.0));
+      RCLCPP_WARN(get_logger(),
+                  "SERVICE STRAIGHT TEST MODE: skipping service yaw correction. "
+                  "averaged_cart_frame=(%.3f, %.3f), remaining_distance=%.3f m, "
+                  "straight_distance=%.3f m, center_tolerance=%.3f m",
+                  averaged_cart_frame->x, averaged_cart_frame->y, remaining_distance, straight_distance,
+                  center_distance_tolerance_);
+
+      if (remaining_distance <= center_distance_tolerance_ ||
+          averaged_cart_frame->x <= center_distance_tolerance_) {
+        RCLCPP_INFO(get_logger(),
+                    "Straight service reached detected cart center: remaining_distance=%.3f m, "
+                    "remaining_x=%.3f m",
+                    remaining_distance, averaged_cart_frame->x);
+        break;
+      }
+
+      if (!drive_forward_open_loop(straight_distance, "Straight test drive to detected cart x")) {
+        return false;
+      }
+
+      log_cart_frame_diagnostic("after straight center drive");
+      averaged_cart_frame = sample_average_cart_frame_after_motion();
     }
 
-    const double straight_distance = std::max(averaged_cart_frame->x - conservative_offset_, 0.0);
-    RCLCPP_WARN(get_logger(),
-                "SERVICE STRAIGHT TEST MODE: skipping service yaw correction. "
-                "averaged_cart_frame=(%.3f, %.3f), straight_distance=%.3f m, final_push=%.3f m",
-                averaged_cart_frame->x, averaged_cart_frame->y, straight_distance,
-                final_drive_distance_);
-
-    if (!drive_forward_open_loop(straight_distance, "Straight test drive to detected cart x")) {
+    if ((now() - start_time).seconds() >= movement_timeout_) {
+      RCLCPP_WARN(get_logger(), "Straight test final approach timed out after %.3f seconds",
+                  movement_timeout_);
       return false;
     }
-
-    log_cart_frame_diagnostic("after straight test drive");
 
     if (!drive_forward_open_loop(final_drive_distance_, "Straight test final shelf push")) {
       return false;
@@ -416,6 +439,17 @@ private:
     elevator_up_pub_->publish(elevator_msg);
     RCLCPP_INFO(get_logger(), "Straight test final approach complete; published /elevator_up");
     return true;
+  }
+
+  std::optional<CartFrame> sample_average_cart_frame_after_motion()
+  {
+    auto cart_frame = wait_for_cart_frame(1.0);
+    if (!cart_frame.has_value()) {
+      RCLCPP_WARN(get_logger(), "Straight service re-detection failed after center drive");
+      return std::nullopt;
+    }
+
+    return sample_average_cart_frame(cart_frame.value());
   }
 
   std::optional<CartFrame> sample_average_cart_frame(const CartFrame & first_cart_frame)
