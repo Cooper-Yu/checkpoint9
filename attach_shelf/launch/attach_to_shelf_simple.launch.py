@@ -22,6 +22,7 @@ def generate_launch_description():
     center_distance_tolerance = LaunchConfiguration("center_distance_tolerance")
     forward_step_distance = LaunchConfiguration("forward_step_distance")
     movement_timeout = LaunchConfiguration("movement_timeout")
+    service_straight_test = LaunchConfiguration("service_straight_test")
     use_rviz = LaunchConfiguration("use_rviz")
 
     rviz_config = [FindPackageShare("attach_shelf"), "/rviz/pre_approach.rviz"]
@@ -82,6 +83,7 @@ def generate_launch_description():
             DeclareLaunchArgument("center_distance_tolerance", default_value="0.20"),
             DeclareLaunchArgument("forward_step_distance", default_value="0.20"),
             DeclareLaunchArgument("movement_timeout", default_value="30.0"),
+            DeclareLaunchArgument("service_straight_test", default_value="false"),
             DeclareLaunchArgument("use_rviz", default_value="true"),
             Node(
                 package="rviz2",
@@ -105,6 +107,7 @@ def generate_launch_description():
                         "center_distance_tolerance": ParameterValue(center_distance_tolerance, value_type=float),
                         "forward_step_distance": ParameterValue(forward_step_distance, value_type=float),
                         "movement_timeout": ParameterValue(movement_timeout, value_type=float),
+                        "service_straight_test": ParameterValue(service_straight_test, value_type=bool),
                     }
                 ],
                 condition=IfCondition(final_approach),

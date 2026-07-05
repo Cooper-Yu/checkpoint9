@@ -35,7 +35,8 @@ public:
         cart_frame_retry_count_(6),
         movement_timeout_(30.0),
         conservative_offset_(0.0),
-        final_drive_distance_(0.30)
+        final_drive_distance_(0.30),
+        service_straight_test_(false)
   {
     declare_parameter<double>("rotate_speed", rotate_speed_);
     declare_parameter<double>("forward_speed", forward_speed_);
@@ -44,6 +45,7 @@ public:
     declare_parameter<double>("center_distance_tolerance", center_distance_tolerance_);
     declare_parameter<double>("forward_step_distance", forward_step_distance_);
     declare_parameter<double>("movement_timeout", movement_timeout_);
+    declare_parameter<bool>("service_straight_test", service_straight_test_);
 
     rotate_speed_ = get_parameter("rotate_speed").as_double();
     forward_speed_ = get_parameter("forward_speed").as_double();
@@ -52,6 +54,7 @@ public:
     center_distance_tolerance_ = get_parameter("center_distance_tolerance").as_double();
     forward_step_distance_ = get_parameter("forward_step_distance").as_double();
     movement_timeout_ = get_parameter("movement_timeout").as_double();
+    service_straight_test_ = get_parameter("service_straight_test").as_bool();
 
     scan_callback_group_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
     service_callback_group_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
@@ -124,7 +127,11 @@ private:
       return;
     }
 
-    response->complete = perform_stepwise_final_approach(cart_frame.value());
+    if (service_straight_test_) {
+      response->complete = perform_straight_test_final_approach(cart_frame.value());
+    } else {
+      response->complete = perform_stepwise_final_approach(cart_frame.value());
+    }
     if (!response->complete) {
       publish_stop();
       RCLCPP_WARN(get_logger(),
@@ -368,6 +375,30 @@ private:
     return true;
   }
 
+  bool perform_straight_test_final_approach(const CartFrame & cart_frame)
+  {
+    const double straight_distance = std::max(cart_frame.x - conservative_offset_, 0.0);
+    RCLCPP_WARN(get_logger(),
+                "SERVICE STRAIGHT TEST MODE: skipping service yaw correction. "
+                "cart_frame=(%.3f, %.3f), straight_distance=%.3f m, final_push=%.3f m",
+                cart_frame.x, cart_frame.y, straight_distance, final_drive_distance_);
+
+    if (!drive_forward_open_loop(straight_distance, "Straight test drive to detected cart x")) {
+      return false;
+    }
+
+    log_cart_frame_diagnostic("after straight test drive");
+
+    if (!drive_forward_open_loop(final_drive_distance_, "Straight test final shelf push")) {
+      return false;
+    }
+
+    std_msgs::msg::String elevator_msg;
+    elevator_up_pub_->publish(elevator_msg);
+    RCLCPP_INFO(get_logger(), "Straight test final approach complete; published /elevator_up");
+    return true;
+  }
+
   std::optional<CartFrame> recover_cart_frame_after_motion(const CartFrame & previous,
                                                            const CartFrame & first_detection,
                                                            double drive_distance)
@@ -567,6 +598,7 @@ private:
   double movement_timeout_;
   double conservative_offset_;
   double final_drive_distance_;
+  bool service_straight_test_;
 
   static constexpr double kPi = 3.14159265358979323846;
 };
