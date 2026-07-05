@@ -103,7 +103,7 @@ def generate_launch_description():
             DeclareLaunchArgument("forward_speed", default_value="0.4"),
             DeclareLaunchArgument("angular_speed", default_value="0.5"),
             DeclareLaunchArgument("rotation_scale", default_value="0.5"),
-            DeclareLaunchArgument("use_tf_rotation", default_value="false"),
+            DeclareLaunchArgument("use_tf_rotation", default_value="true"),
             DeclareLaunchArgument("rotation_tolerance", default_value="0.03"),
             DeclareLaunchArgument("rotation_reference_frame", default_value="odom"),
             DeclareLaunchArgument("rotation_base_frame", default_value="robot_base_footprint"),

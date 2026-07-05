@@ -46,22 +46,14 @@ Task 2 launch:
 ros2 launch attach_shelf attach_to_shelf.launch.py obstacle:=0.4 degrees:=-90 final_approach:=false
 ```
 
-Validated final-approach tuning used during training:
+Run the full attach-to-shelf flow:
 
 ```bash
-ros2 launch attach_shelf attach_to_shelf.launch.py \
-  obstacle:=0.4 \
-  degrees:=-90 \
-  final_approach:=true \
-  use_tf_rotation:=true \
-  center_drive_scale:=3.3 \
-  service_lateral_yaw_gain:=0.4 \
-  final_drive_distance:=0.30 \
-  verify_center_before_final_push:=false \
-  target_base_frame:=robot_base_link
+ros2 launch attach_shelf attach_to_shelf.launch.py obstacle:=0.4 degrees:=-90 final_approach:=true
 ```
 
 Use `final_approach:=true` to start `approach_service_server`; `pre_approach_v2` then calls `/approach_shelf`, drives under the shelf, and publishes `/elevator_up`.
+The package defaults include the validated TF rotation and final-approach tuning.
 
 ## Parameters
 
@@ -69,8 +61,9 @@ Use `final_approach:=true` to start `approach_service_server`; `pre_approach_v2`
 - `degrees`: rotation angle after stopping. Negative values rotate clockwise.
 - `forward_speed`: forward velocity in meters per second. Default: `0.4`.
 - `angular_speed`: rotation velocity in radians per second. Default: `0.5`.
-- `rotation_scale`: multiplier applied to the open-loop rotation time. Default: `0.5`.
+- `rotation_scale`: multiplier applied to the open-loop rotation time when TF rotation is disabled. Default: `0.5`.
 - `final_approach`: Task 2 boolean. When `false`, launch runs only the Task 1 pre-approach. When `true`, `pre_approach_v2` calls `/approach_shelf` after the pre-approach rotation.
+- `use_tf_rotation`: whether pre-approach rotation uses TF yaw feedback. Default: `true`.
 - `use_rviz`: whether to start RViz. Default: `true`.
 
 ## Interfaces
