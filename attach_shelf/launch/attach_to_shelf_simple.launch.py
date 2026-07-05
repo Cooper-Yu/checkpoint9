@@ -27,6 +27,7 @@ def generate_launch_description():
     conservative_offset = LaunchConfiguration("conservative_offset")
     final_drive_distance = LaunchConfiguration("final_drive_distance")
     enable_final_push = LaunchConfiguration("enable_final_push")
+    verify_center_before_final_push = LaunchConfiguration("verify_center_before_final_push")
     center_lateral_tolerance = LaunchConfiguration("center_lateral_tolerance")
     center_distance_tolerance = LaunchConfiguration("center_distance_tolerance")
     center_lock_distance = LaunchConfiguration("center_lock_distance")
@@ -112,6 +113,7 @@ def generate_launch_description():
             DeclareLaunchArgument("conservative_offset", default_value="0.0"),
             DeclareLaunchArgument("final_drive_distance", default_value="0.30"),
             DeclareLaunchArgument("enable_final_push", default_value="true"),
+            DeclareLaunchArgument("verify_center_before_final_push", default_value="false"),
             DeclareLaunchArgument("center_lateral_tolerance", default_value="0.05"),
             DeclareLaunchArgument("center_distance_tolerance", default_value="0.20"),
             DeclareLaunchArgument("center_lock_distance", default_value="0.35"),
@@ -152,6 +154,9 @@ def generate_launch_description():
                         "conservative_offset": ParameterValue(conservative_offset, value_type=float),
                         "final_drive_distance": ParameterValue(final_drive_distance, value_type=float),
                         "enable_final_push": ParameterValue(enable_final_push, value_type=bool),
+                        "verify_center_before_final_push": ParameterValue(
+                            verify_center_before_final_push, value_type=bool
+                        ),
                         "center_lateral_tolerance": ParameterValue(
                             center_lateral_tolerance, value_type=float
                         ),

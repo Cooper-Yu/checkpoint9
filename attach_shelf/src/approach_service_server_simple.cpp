@@ -52,6 +52,7 @@ public:
         conservative_offset_(0.0),
         final_drive_distance_(0.30),
         enable_final_push_(true),
+        verify_center_before_final_push_(false),
         service_straight_test_(false),
         straight_sample_count_(5),
         straight_sample_max_spread_(0.15),
@@ -77,6 +78,7 @@ public:
     declare_parameter<double>("forward_step_distance", forward_step_distance_);
     declare_parameter<double>("movement_timeout", movement_timeout_);
     declare_parameter<bool>("enable_final_push", enable_final_push_);
+    declare_parameter<bool>("verify_center_before_final_push", verify_center_before_final_push_);
     declare_parameter<bool>("service_straight_test", service_straight_test_);
     declare_parameter<int>("straight_sample_count", straight_sample_count_);
     declare_parameter<double>("straight_sample_max_spread", straight_sample_max_spread_);
@@ -102,6 +104,7 @@ public:
     forward_step_distance_ = get_parameter("forward_step_distance").as_double();
     movement_timeout_ = get_parameter("movement_timeout").as_double();
     enable_final_push_ = get_parameter("enable_final_push").as_bool();
+    verify_center_before_final_push_ = get_parameter("verify_center_before_final_push").as_bool();
     service_straight_test_ = get_parameter("service_straight_test").as_bool();
     straight_sample_count_ = get_parameter("straight_sample_count").as_int();
     straight_sample_max_spread_ = get_parameter("straight_sample_max_spread").as_double();
@@ -572,7 +575,12 @@ private:
       return false;
     }
 
-    log_final_center_verification("after center approach");
+    if (verify_center_before_final_push_) {
+      log_final_center_verification("after center approach");
+    } else {
+      RCLCPP_INFO(get_logger(),
+                  "Final center verification skipped before final shelf push for smoother motion");
+    }
 
     if (center_extra_forward_distance_ > 0.0) {
       RCLCPP_WARN(get_logger(),
@@ -1040,6 +1048,7 @@ private:
   double conservative_offset_;
   double final_drive_distance_;
   bool enable_final_push_;
+  bool verify_center_before_final_push_;
   bool service_straight_test_;
   int straight_sample_count_;
   double straight_sample_max_spread_;
