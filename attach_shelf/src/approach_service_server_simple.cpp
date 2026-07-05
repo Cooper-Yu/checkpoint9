@@ -34,6 +34,7 @@ public:
         center_distance_tolerance_(0.20),
         center_lock_distance_(0.35),
         center_lock_min_steps_(2),
+        center_drive_scale_(1.5),
         forward_step_distance_(0.20),
         cart_frame_retry_count_(6),
         movement_timeout_(30.0),
@@ -52,6 +53,7 @@ public:
     declare_parameter<double>("center_distance_tolerance", center_distance_tolerance_);
     declare_parameter<double>("center_lock_distance", center_lock_distance_);
     declare_parameter<int>("center_lock_min_steps", center_lock_min_steps_);
+    declare_parameter<double>("center_drive_scale", center_drive_scale_);
     declare_parameter<double>("forward_step_distance", forward_step_distance_);
     declare_parameter<double>("movement_timeout", movement_timeout_);
     declare_parameter<bool>("enable_final_push", enable_final_push_);
@@ -67,6 +69,7 @@ public:
     center_distance_tolerance_ = get_parameter("center_distance_tolerance").as_double();
     center_lock_distance_ = get_parameter("center_lock_distance").as_double();
     center_lock_min_steps_ = get_parameter("center_lock_min_steps").as_int();
+    center_drive_scale_ = get_parameter("center_drive_scale").as_double();
     forward_step_distance_ = get_parameter("forward_step_distance").as_double();
     movement_timeout_ = get_parameter("movement_timeout").as_double();
     enable_final_push_ = get_parameter("enable_final_push").as_bool();
@@ -375,11 +378,11 @@ private:
     RCLCPP_INFO(get_logger(),
                 "Stepwise final approach started: center_tolerance=%.3f m, "
                 "lateral_tolerance=%.3f m, lock_distance=%.3f m, lock_min_steps=%d, "
-                "forward_step=%.3f m, movement_timeout=%.3f s, final_push=%.3f m, "
-                "enable_final_push=%s",
+                "center_drive_scale=%.3f, forward_step=%.3f m, movement_timeout=%.3f s, "
+                "final_push=%.3f m, enable_final_push=%s",
                 center_distance_tolerance_, center_lateral_tolerance_, center_lock_distance_,
-                center_lock_min_steps_, forward_step_distance_, movement_timeout_,
-                final_drive_distance_, enable_final_push_ ? "true" : "false");
+                center_lock_min_steps_, center_drive_scale_, forward_step_distance_,
+                movement_timeout_, final_drive_distance_, enable_final_push_ ? "true" : "false");
 
     while (rclcpp::ok() && (now() - start_time).seconds() < movement_timeout_) {
       if (!averaged_cart_frame.has_value()) {
@@ -408,13 +411,16 @@ private:
       }
 
       if (step >= center_lock_min_steps_ && averaged_cart_frame->x <= center_lock_distance_) {
-        const double locked_drive_distance =
+        const double raw_locked_drive_distance =
             std::max(averaged_cart_frame->x - conservative_offset_, 0.0);
+        const double locked_drive_distance = raw_locked_drive_distance * center_drive_scale_;
         RCLCPP_WARN(get_logger(),
                     "Locking final center approach: step=%d, cart_frame=(%.3f, %.3f), "
+                    "raw_locked_drive_distance=%.3f m, center_drive_scale=%.3f, "
                     "locked_drive_distance=%.3f m. Further cart_frame re-detection is skipped "
                     "because close-range reflective clusters can jump.",
-                    step, averaged_cart_frame->x, averaged_cart_frame->y, locked_drive_distance);
+                    step, averaged_cart_frame->x, averaged_cart_frame->y, raw_locked_drive_distance,
+                    center_drive_scale_, locked_drive_distance);
         if (!drive_forward_open_loop(locked_drive_distance, "Locked drive to cart center")) {
           return false;
         }
@@ -828,6 +834,7 @@ private:
   double center_distance_tolerance_;
   double center_lock_distance_;
   int center_lock_min_steps_;
+  double center_drive_scale_;
   double forward_step_distance_;
   int cart_frame_retry_count_;
   double movement_timeout_;

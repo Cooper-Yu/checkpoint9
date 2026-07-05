@@ -28,6 +28,7 @@ def generate_launch_description():
     center_distance_tolerance = LaunchConfiguration("center_distance_tolerance")
     center_lock_distance = LaunchConfiguration("center_lock_distance")
     center_lock_min_steps = LaunchConfiguration("center_lock_min_steps")
+    center_drive_scale = LaunchConfiguration("center_drive_scale")
     forward_step_distance = LaunchConfiguration("forward_step_distance")
     movement_timeout = LaunchConfiguration("movement_timeout")
     service_straight_test = LaunchConfiguration("service_straight_test")
@@ -103,6 +104,7 @@ def generate_launch_description():
             DeclareLaunchArgument("center_distance_tolerance", default_value="0.20"),
             DeclareLaunchArgument("center_lock_distance", default_value="0.35"),
             DeclareLaunchArgument("center_lock_min_steps", default_value="2"),
+            DeclareLaunchArgument("center_drive_scale", default_value="1.5"),
             DeclareLaunchArgument("forward_step_distance", default_value="0.20"),
             DeclareLaunchArgument("movement_timeout", default_value="30.0"),
             DeclareLaunchArgument("service_straight_test", default_value="false"),
@@ -135,6 +137,7 @@ def generate_launch_description():
                         "center_distance_tolerance": ParameterValue(center_distance_tolerance, value_type=float),
                         "center_lock_distance": ParameterValue(center_lock_distance, value_type=float),
                         "center_lock_min_steps": ParameterValue(center_lock_min_steps, value_type=int),
+                        "center_drive_scale": ParameterValue(center_drive_scale, value_type=float),
                         "forward_step_distance": ParameterValue(forward_step_distance, value_type=float),
                         "movement_timeout": ParameterValue(movement_timeout, value_type=float),
                         "service_straight_test": ParameterValue(service_straight_test, value_type=bool),
