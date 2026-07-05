@@ -69,7 +69,7 @@ def generate_launch_description():
             DeclareLaunchArgument("obstacle", default_value="0.4"),
             DeclareLaunchArgument("degrees", default_value="-90.0"),
             DeclareLaunchArgument("final_approach", default_value="false"),
-            DeclareLaunchArgument("forward_speed", default_value="0.4"),
+            DeclareLaunchArgument("forward_speed", default_value="0.2"),
             DeclareLaunchArgument("angular_speed", default_value="0.5"),
             DeclareLaunchArgument("rotation_scale", default_value="0.5"),
             DeclareLaunchArgument("service_forward_speed", default_value="0.2"),

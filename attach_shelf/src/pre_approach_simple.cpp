@@ -19,7 +19,7 @@ public:
       : Node("pre_approach_simple"),
         obstacle_(0.4),
         degrees_(-90.0),
-        forward_speed_(0.4),
+        forward_speed_(0.2),
         angular_speed_(0.5),
         rotation_scale_(0.5),
         planned_drive_distance_(0.0),
@@ -129,6 +129,9 @@ private:
                 "planned_drive_distance=%.3f m, planned_drive_time=%.3f s, rotate_time=%.3f s",
                 front_distance, obstacle_, planned_drive_distance_, planned_drive_time_,
                 planned_rotate_time_);
+    RCLCPP_INFO(get_logger(),
+                "Open-loop pre-approach will not re-check final distance; tune forward_speed if "
+                "the robot stops too far from or too close to the obstacle");
 
     move_start_time_ = now();
     set_state(State::MOVING_OPEN_LOOP, "first scan captured; using planned open-loop distance");
