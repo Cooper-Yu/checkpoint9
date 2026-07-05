@@ -411,14 +411,21 @@ private:
   {
     const double previous_distance = std::hypot(previous.x, previous.y);
     const double current_distance = std::hypot(current.x, current.y);
+    const double previous_lateral_error = std::abs(previous.y);
+    const double current_lateral_error = std::abs(current.y);
     const bool moved_closer = current_distance < previous_distance;
+    const bool lateral_error_improved = current_lateral_error <= previous_lateral_error;
+    const bool accepted = moved_closer && lateral_error_improved;
 
     RCLCPP_INFO(get_logger(),
                 "cart_frame progress check: previous_distance=%.3f, current_distance=%.3f, "
-                "drive_distance=%.3f, moved_closer=%s",
-                previous_distance, current_distance, drive_distance, moved_closer ? "true" : "false");
+                "previous_abs_y=%.3f, current_abs_y=%.3f, drive_distance=%.3f, "
+                "moved_closer=%s, lateral_error_improved=%s, accepted=%s",
+                previous_distance, current_distance, previous_lateral_error, current_lateral_error,
+                drive_distance, moved_closer ? "true" : "false",
+                lateral_error_improved ? "true" : "false", accepted ? "true" : "false");
 
-    return moved_closer;
+    return accepted;
   }
 
   void log_cart_frame_diagnostic(const std::string & label)
