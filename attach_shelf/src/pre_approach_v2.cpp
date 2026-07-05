@@ -272,14 +272,13 @@ private:
         return;
       }
 
-      // SAFE_STOP and DONE should publish_stop().
+      // SAFE_STOP keeps the robot stopped; DONE hands /cmd_vel ownership to the service.
       case State::SAFE_STOP: {
         publish_stop();
         return;
       }
 
       case State::DONE: {
-        publish_stop();
         call_approach_service_once();
         return;
       }
@@ -453,14 +452,14 @@ private:
 
   void call_approach_service_once()
   {
-    publish_stop();
-
     if (!final_approach_) {
+      publish_stop();
       request_shutdown("pre_approach_v2 complete; final_approach=false");
       return;
     }
 
-    // DONE is visited by the timer repeatedly, so guard against duplicate requests.
+    // DONE is visited by the timer repeatedly. Once the service owns /cmd_vel,
+    // this node must not keep publishing stop commands in parallel.
     if (service_call_started_) {
       if ((now() - service_request_time_).seconds() > 45.0) {
         enter_safe_stop("/approach_shelf timed out");
@@ -471,6 +470,7 @@ private:
 
     service_call_started_ = true;
     service_request_time_ = now();
+    publish_stop();
 
     if (!approach_client_->wait_for_service(3s)) {
       enter_safe_stop("/approach_shelf is not available");
