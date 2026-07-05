@@ -14,7 +14,7 @@
 #include "rclcpp/executors/multi_threaded_executor.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/laser_scan.hpp"
-#include "std_msgs/msg/empty.hpp"
+#include "std_msgs/msg/string.hpp"
 #include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
 #include "tf2_ros/buffer.h"
 #include "tf2_ros/transform_broadcaster.h"
@@ -115,7 +115,7 @@ public:
         scan_options);
 
     cmd_vel_pub_ = create_publisher<geometry_msgs::msg::Twist>("/cmd_vel", 10);
-    elevator_up_pub_ = create_publisher<std_msgs::msg::Empty>("/elevator_up", 10);
+    elevator_up_pub_ = create_publisher<std_msgs::msg::String>("/elevator_up", 10);
     tf_buffer_ = std::make_unique<tf2_ros::Buffer>(get_clock());
     tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
     tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
@@ -954,7 +954,8 @@ private:
 
   void publish_elevator_up()
   {
-    std_msgs::msg::Empty elevator_msg;
+    std_msgs::msg::String elevator_msg;
+    elevator_msg.data = "up";
     rclcpp::Rate rate(10.0);
     for (int i = 0; rclcpp::ok() && i < 5; ++i) {
       elevator_up_pub_->publish(elevator_msg);
@@ -964,7 +965,7 @@ private:
 
   rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr scan_sub_;
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_pub_;
-  rclcpp::Publisher<std_msgs::msg::Empty>::SharedPtr elevator_up_pub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr elevator_up_pub_;
   rclcpp::Service<attach_shelf::srv::GoToLoading>::SharedPtr approach_service_;
   rclcpp::CallbackGroup::SharedPtr scan_callback_group_;
   rclcpp::CallbackGroup::SharedPtr service_callback_group_;
