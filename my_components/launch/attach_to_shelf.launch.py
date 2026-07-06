@@ -27,6 +27,7 @@ def generate_launch_description():
             "rotation_tolerance": 0.03,
             "rotation_reference_frame": "odom",
             "rotation_base_frame": "robot_base_footprint",
+            "shutdown_on_complete": False,
         }
     ]
 

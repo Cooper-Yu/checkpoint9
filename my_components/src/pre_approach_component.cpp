@@ -34,6 +34,7 @@ public:
         rotation_tolerance_(0.03),
         rotation_reference_frame_("odom"),
         rotation_base_frame_("robot_base_footprint"),
+        shutdown_on_complete_(true),
         rotate_time_(0.0),
         target_yaw_(0.0),
         invalid_scan_count_(0),
@@ -52,6 +53,7 @@ public:
     declare_parameter<double>("rotation_tolerance", rotation_tolerance_);
     declare_parameter<std::string>("rotation_reference_frame", rotation_reference_frame_);
     declare_parameter<std::string>("rotation_base_frame", rotation_base_frame_);
+    declare_parameter<bool>("shutdown_on_complete", shutdown_on_complete_);
 
     obstacle_ = get_parameter("obstacle").as_double();
     degrees_ = get_parameter("degrees").as_double();
@@ -62,6 +64,7 @@ public:
     rotation_tolerance_ = get_parameter("rotation_tolerance").as_double();
     rotation_reference_frame_ = get_parameter("rotation_reference_frame").as_string();
     rotation_base_frame_ = get_parameter("rotation_base_frame").as_string();
+    shutdown_on_complete_ = get_parameter("shutdown_on_complete").as_bool();
 
     if (obstacle_ <= 0.0) {
       state_ = State::SAFE_STOP;
@@ -109,9 +112,9 @@ public:
     RCLCPP_INFO(get_logger(),
                 "pre_approach started: obstacle=%.2f m, degrees=%.2f, forward_speed=%.2f m/s, "
                 "angular_speed=%.2f rad/s, rotation_scale=%.2f, rotate_time=%.2f s, "
-                "use_tf_rotation=%s",
+                "use_tf_rotation=%s, shutdown_on_complete=%s",
                 obstacle_, degrees_, forward_speed_, angular_speed_, rotation_scale_, rotate_time_,
-                use_tf_rotation_ ? "true" : "false");
+                use_tf_rotation_ ? "true" : "false", shutdown_on_complete_ ? "true" : "false");
   }
 
 private:
@@ -464,8 +467,14 @@ private:
 
     shutdown_requested_ = true;
     RCLCPP_INFO(get_logger(), "%s", reason.c_str());
-    // In a composable container, shutting down rclcpp would also stop the
-    // AttachServer. Cancel only this component's timer so Task 2 can continue.
+    if (shutdown_on_complete_) {
+      rclcpp::shutdown();
+      return;
+    }
+
+    // In the Task 2 container, shutting down rclcpp would also stop the
+    // AttachServer. Cancel only this component's timer so the client can be
+    // loaded after the pre-approach finishes.
     control_timer_->cancel();
   }
 
@@ -482,6 +491,7 @@ private:
   double rotation_tolerance_;
   std::string rotation_reference_frame_;
   std::string rotation_base_frame_;
+  bool shutdown_on_complete_;
   double rotate_time_;
   double target_yaw_;
 
